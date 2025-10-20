@@ -18,11 +18,11 @@ ENV PATH="${JAVA_HOME}/bin:${PATH}"
 
 # Install Daikon
 WORKDIR /opt
-RUN wget https://plse.cs.washington.edu/daikon/download/daikon-5.8.18.tar.gz && \
-    tar -xzf daikon-5.8.18.tar.gz && \
-    rm daikon-5.8.18.tar.gz
+RUN wget https://plse.cs.washington.edu/daikon/download/daikon-5.8.22.tar.gz && \
+    tar -xzf daikon-5.8.22.tar.gz && \
+    rm daikon-5.8.22.tar.gz
 
-ENV DAIKONDIR=/opt/daikon-5.8.18
+ENV DAIKONDIR=/opt/daikon-5.8.22
 ENV PATH="${DAIKONDIR}/bin:${PATH}"
 ENV CLASSPATH="${DAIKONDIR}/daikon.jar:${CLASSPATH}"
 
