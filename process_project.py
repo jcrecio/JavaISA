@@ -13,6 +13,10 @@ from pathlib import Path
 from typing import Dict, List, Set
 
 
+def print_flush(text):
+    print(text, flush=True)
+
+
 class DaikonJMLProcessor:
     def __init__(self):
         self.project_root = Path.cwd()
@@ -94,14 +98,14 @@ class DaikonJMLProcessor:
 
     def detect_tests(self):
         """Detect test classes and map them to the classes they test."""
-        print("Scanning project structure...")
+        print_flush("Scanning project structure...")
 
         # Find all test files
         test_files = self.find_java_files(self.src_test)
         main_files = self.find_java_files(self.src_main)
 
-        print(f"Found {len(test_files)} test files")
-        print(f"Found {len(main_files)} main source files")
+        print_flush(f"Found {len(test_files)} test files")
+        print_flush(f"Found {len(main_files)} main source files")
 
         # Parse all files
         test_info = [self.parse_imports_and_classes(f) for f in test_files]
@@ -142,11 +146,11 @@ class DaikonJMLProcessor:
         with open("test-mapping.json", "w") as f:
             json.dump(test_mapping, f, indent=2)
 
-        print(f"\n✓ Detected {len(test_mapping)} test classes")
+        print_flush(f"\n✓ Detected {len(test_mapping)} test classes")
         for test_cls, info in test_mapping.items():
-            print(f"  • {test_cls}")
+            print_flush(f"  • {test_cls}")
             for tested in info["tested_classes"]:
-                print(f"    → tests: {tested}")
+                print_flush(f"    → tests: {tested}")
 
         return test_mapping
 
@@ -168,7 +172,7 @@ class DaikonJMLProcessor:
 
     def instrument_with_daikon(self):
         """Instrument classes with Daikon's DynComp and Chicory."""
-        print("Reading test mapping...")
+        print_flush("Reading test mapping...")
         with open("test-mapping.json", "r") as f:
             test_mapping = json.load(f)
 
@@ -177,23 +181,24 @@ class DaikonJMLProcessor:
         for info in test_mapping.values():
             classes_to_instrument.update(info["tested_classes"])
 
-        print(f"Will instrument {len(classes_to_instrument)} classes")
+        print_flush(f"Will instrument {len(classes_to_instrument)} classes")
 
         # Save list for later use
         with open("classes-to-instrument.txt", "w") as f:
             for cls in sorted(classes_to_instrument):
                 f.write(f"{cls}\n")
 
-        print("✓ Classes prepared for instrumentation")
+        print_flush("✓ Classes prepared for instrumentation")
 
     def run_daikon_on_tests(self):
         """Run tests with Daikon to collect invariants."""
-        print("Reading test mapping...")
+        print_flush("patata")
+        print_flush("Reading test mapping...")
         with open("test-mapping.json", "r") as f:
             test_mapping = json.load(f)
 
         if not test_mapping:
-            print("No test classes found to run")
+            print_flush("No test classes found to run")
             return
 
         # Get classpath
@@ -202,7 +207,7 @@ class DaikonJMLProcessor:
 
         # Run tests with Chicory instrumentation
         for test_class in test_mapping.keys():
-            print(f"\nRunning Daikon on: {test_class}")
+            print_flush(f"\nRunning Daikon on: {test_class}")
 
             dtrace_file = (
                 self.daikon_output / f"{test_class.replace('.', '_')}.dtrace.gz"
@@ -220,21 +225,21 @@ class DaikonJMLProcessor:
                 test_class,
             ]
 
-            print(f"  Command: {' '.join(cmd)}")
+            print_flush(f"  Command: {' '.join(cmd)}")
 
             result = subprocess.run(cmd, capture_output=True, text=True)
 
             if result.returncode == 0 or "OK" in result.stdout:
-                print(f"  ✓ Collected invariants for {test_class}")
+                print_flush(f"  ✓ Collected invariants for {test_class}")
             else:
-                print(f"  ⚠ Warning: Test execution had issues")
+                print_flush(f"  ⚠ Warning: Test execution had issues")
                 if result.stdout:
-                    print(f"  stdout: {result.stdout[:200]}")
+                    print_flush(f"  stdout: {result.stdout[:200]}")
                 if result.stderr:
-                    print(f"  stderr: {result.stderr[:200]}")
+                    print_flush(f"  stderr: {result.stderr[:200]}")
 
         # Process dtrace files to generate invariants
-        print("\nGenerating invariants from trace files...")
+        print_flush("\nGenerating invariants from trace files...")
         dtrace_files = list(self.daikon_output.glob("*.dtrace.gz"))
 
         for dtrace in dtrace_files:
@@ -271,15 +276,15 @@ class DaikonJMLProcessor:
             subprocess.run(cmd_jml, capture_output=True)
 
             if inv_file.exists():
-                print(f"  ✓ Generated invariants: {inv_file.name}")
+                print_flush(f"  ✓ Generated invariants: {inv_file.name}")
 
     def generate_jml_decorations(self):
         """Decorate original classes with JML annotations."""
-        print("Generating JML decorated classes...")
+        print_flush("Generating JML decorated classes...")
 
         # Read which classes were instrumented
         if not Path("classes-to-instrument.txt").exists():
-            print("No classes to decorate")
+            print_flush("No classes to decorate")
             return
 
         with open("classes-to-instrument.txt", "r") as f:
@@ -289,7 +294,9 @@ class DaikonJMLProcessor:
         jml_files = list(self.daikon_output.glob("*.jml"))
 
         if not jml_files:
-            print("⚠ No JML files found. Attempting to generate from invariants...")
+            print_flush(
+                "⚠ No JML files found. Attempting to generate from invariants..."
+            )
             inv_files = list(self.daikon_output.glob("*.inv.gz"))
 
             daikon_jar = os.path.join(os.environ["DAIKONDIR"], "daikon.jar")
@@ -317,7 +324,7 @@ class DaikonJMLProcessor:
             src_file = self.src_main / cls_path
 
             if not src_file.exists():
-                print(f"  ⚠ Source file not found: {src_file}")
+                print_flush(f"  ⚠ Source file not found: {src_file}")
                 continue
 
             # Read original source
@@ -336,7 +343,7 @@ class DaikonJMLProcessor:
             decorated_file.parent.mkdir(parents=True, exist_ok=True)
             decorated_file.write_text(decorated_content, encoding="utf-8")
 
-            print(f"  ✓ Decorated: {cls_name}")
+            print_flush(f"  ✓ Decorated: {cls_name}")
 
     def find_jml_for_class(self, class_name: str, jml_files: List[Path]) -> str:
         """Find JML specifications for a specific class."""
@@ -389,12 +396,12 @@ class DaikonJMLProcessor:
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: process_project.py <command>")
-        print("Commands:")
-        print("  detect-tests     - Detect test classes and their targets")
-        print("  instrument-daikon - Prepare classes for Daikon instrumentation")
-        print("  run-daikon       - Run tests with Daikon to collect invariants")
-        print("  generate-jml     - Generate JML decorated classes")
+        print_flush("Usage: process_project.py <command>")
+        print_flush("Commands:")
+        print_flush("  detect-tests     - Detect test classes and their targets")
+        print_flush("  instrument-daikon - Prepare classes for Daikon instrumentation")
+        print_flush("  run-daikon       - Run tests with Daikon to collect invariants")
+        print_flush("  generate-jml     - Generate JML decorated classes")
         sys.exit(1)
 
     processor = DaikonJMLProcessor()
@@ -405,11 +412,12 @@ def main():
     elif command == "instrument-daikon":
         processor.instrument_with_daikon()
     elif command == "run-daikon":
+        print_flush("____debug")
         processor.run_daikon_on_tests()
     elif command == "generate-jml":
         processor.generate_jml_decorations()
     else:
-        print(f"Unknown command: {command}")
+        print_flush(f"Unknown command: {command}")
         sys.exit(1)
 
 

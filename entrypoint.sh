@@ -123,8 +123,8 @@ case $COMMAND in
         # Step 6: Run tests with Daikon
         echo "[2/3] Running tests with Daikon to collect invariants..."
         echo "This may take a while depending on the number of tests..."
+        echo "---> $REPO_NAME"
         python3 /usr/local/bin/process_project.py run-daikon
-
         # Step 7: Decorate classes with JML
         echo "[3/3] Decorating classes with JML annotations..."
         python3 /usr/local/bin/process_project.py generate-jml

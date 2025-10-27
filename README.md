@@ -1,6 +1,6 @@
-# Daikon JML Instrumentation Docker Tool
+# JavaISA: Daikon JML Instrumentation Docker Tool
 
-A comprehensive Docker-based tool for automatically analyzing Java Maven projects using the Daikon invariant detector and generating JML (Java Modeling Language) specifications.
+A comprehensive Docker-based tool for automatically modelling JML specifications from Java Maven projects using the Daikon invariant detector.
 
 ## Table of Contents
 
@@ -9,10 +9,10 @@ A comprehensive Docker-based tool for automatically analyzing Java Maven project
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
-- [Detailed Usage](#detailed-usage)
+- [Two-Phase Workflow](#two-phase-workflow)
+- [Detailed Command Reference](#detailed-command-reference)
 - [Pipeline Architecture](#pipeline-architecture)
 - [Output Structure](#output-structure)
-- [Configuration Options](#configuration-options)
 - [Examples](#examples)
 - [Advanced Usage](#advanced-usage)
 - [Troubleshooting](#troubleshooting)
@@ -30,20 +30,21 @@ This Docker image provides a complete, automated pipeline for:
 - Generating formal JML specifications based on discovered invariants
 - Decorating original source code with JML annotations
 
-The tool is particularly useful for:
-- **Software verification**: Generate formal specifications for existing code
-- **Documentation**: Automatically document behavioral contracts
-- **Reverse engineering**: Understand implicit constraints in legacy code
-- **Testing**: Verify that code behavior matches expected invariants
+The tool uses a **two-phase approach** for better control and flexibility:
+1. **Prepare Phase**: Fast setup (clone, compile, detect tests)
+2. **Analyze Phase**: Intensive analysis (Daikon instrumentation and JML generation)
 
 ## What This Tool Does
 
-### Step-by-Step Process
+### The Two-Phase Process
 
+#### Phase 1: Prepare (Fast - 1-5 minutes)
 1. **Repository Cloning**: Downloads your Java project from GitHub
 2. **Compilation Verification**: Ensures the project builds successfully with Maven
 3. **Test Discovery**: Intelligently identifies all JUnit test classes (both JUnit 4 and 5)
 4. **Test Mapping**: Analyzes test code to determine which production classes each test exercises
+
+#### Phase 2: Analyze (Intensive - 10-60 minutes)
 5. **Daikon Instrumentation**: Instruments bytecode to collect runtime information
 6. **Invariant Collection**: Runs your test suite while recording variable values and relationships
 7. **JML Generation**: Converts discovered invariants into formal JML specifications
@@ -95,9 +96,9 @@ Your Java project must meet these criteria:
 
 ## Installation
 
-### Option 1: Build from Source
+### Building the Docker Image
 
-1. **Clone or download these files** to a directory:
+1. **Create or download these files** to a directory:
    - `Dockerfile`
    - `entrypoint.sh`
    - `process_project.py`
@@ -123,264 +124,314 @@ Your Java project must meet these criteria:
    docker images | grep daikon-jml
    ```
 
-### Option 2: Pre-built Image (if available)
-
-```bash
-docker pull your-registry/daikon-jml:latest
-```
+   You should see output like:
+   ```
+   daikon-jml    latest    abc123def456    5 minutes ago    2.5GB
+   ```
 
 ## Quick Start
 
-### Analyze a GitHub Repository
+### Complete Two-Phase Workflow
 
 ```bash
-docker run --rm daikon-jml:latest https://github.com/username/project.git
-```
+# Create workspace directory
+mkdir -p workspace
 
-### Save Results to Your Machine
-
-```bash
-# Create output directory
-mkdir -p ./analysis-output
-
-# Run analysis and mount output directory
+# Phase 1: Prepare the project (fast)
 docker run --rm \
-  -v $(pwd)/analysis-output:/workspace \
+  -v $(pwd)/workspace:/workspace \
   daikon-jml:latest \
-  https://github.com/username/project.git
-```
+  prepare https://github.com/username/repository.git
 
-After completion, check `./analysis-output/project-name/` for results.
-
-## Detailed Usage
-
-### Basic Command Structure
-
-```bash
-docker run [DOCKER_OPTIONS] daikon-jml:latest [REPOSITORY_URL]
-```
-
-### Docker Options Explained
-
-#### Volume Mounting (Persist Results)
-
-```bash
--v /host/path:/workspace
-```
-
-Maps a directory on your machine to the container's workspace. Results persist after container stops.
-
-**Example**:
-```bash
-docker run --rm -v $(pwd)/output:/workspace daikon-jml:latest https://github.com/user/repo.git
-```
-
-#### Interactive Mode (For Debugging)
-
-```bash
-docker run -it --rm daikon-jml:latest bash
-```
-
-Starts a shell inside the container for manual execution and debugging.
-
-**Inside the container**:
-```bash
-/usr/local/bin/entrypoint.sh https://github.com/user/repo.git
-```
-
-#### Remove Container After Completion
-
-```bash
---rm
-```
-
-Automatically removes the container after it finishes (recommended to save disk space).
-
-#### Named Container (For Long-Running Analysis)
-
-```bash
---name my-analysis
-```
-
-Gives your container a specific name for easier reference.
-
-**Example**:
-```bash
-docker run --name java-analysis -v $(pwd)/output:/workspace daikon-jml:latest https://github.com/user/repo.git
-
-# Check status
-docker ps -a | grep java-analysis
-
-# View logs
-docker logs java-analysis
-```
-
-### Environment Variables
-
-You can customize behavior with environment variables:
-
-```bash
+# Phase 2: Run Daikon analysis (slow)
 docker run --rm \
-  -e MAVEN_OPTS="-Xmx4g" \
-  -e DAIKON_MEMORY="2g" \
-  -v $(pwd)/output:/workspace \
+  -v $(pwd)/workspace:/workspace \
   daikon-jml:latest \
-  https://github.com/user/repo.git
+  analyze repository
 ```
 
-## Pipeline Architecture
+**Windows PowerShell:**
+```powershell
+# Create workspace directory
+New-Item -ItemType Directory -Force -Path workspace
 
-### Complete Pipeline Flow
+# Phase 1: Prepare
+docker run --rm -v ${PWD}/workspace:/workspace `
+  daikon-jml:latest `
+  prepare https://github.com/username/repository.git
+
+# Phase 2: Analyze
+docker run --rm -v ${PWD}/workspace:/workspace `
+  daikon-jml:latest `
+  analyze repository
+```
+
+### Check Results
+
+After both phases complete:
+
+```bash
+# View test mapping
+cat workspace/repository/test-mapping.json
+
+# List Daikon outputs
+ls workspace/repository/daikon-output/
+
+# View JML decorated classes
+ls workspace/repository/jml-decorated-classes/
+```
+
+## Two-Phase Workflow
+
+### Why Two Phases?
+
+The split workflow provides several advantages:
+
+**Benefits:**
+
+1. ✅ **Verify Compilation First**: Ensure the project compiles before running time-consuming Daikon analysis
+2. ✅ **Inspect Test Mapping**: Review `test-mapping.json` to see what will be analyzed
+3. ✅ **Modify Configuration**: Adjust test selection between phases
+4. ✅ **Resume Analysis**: If analysis fails, re-run only the analyze phase
+5. ✅ **Batch Processing**: Prepare multiple projects, analyze them later or in parallel
+6. ✅ **Resource Management**: Run prepare on local machine, analyze on powerful server
+
+### Typical Workflow
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  1. CLONE REPOSITORY                                        │
-│     - git clone from GitHub                                 │
-│     - Validates repository accessibility                    │
+│  PREPARE PHASE (Fast: 1-5 minutes)                         │
+│                                                              │
+│  1. Clone repository                                        │
+│  2. Compile project (mvn compile)                           │
+│  3. Detect test classes                                     │
+│  4. Map tests to production classes                         │
+│  5. Compile tests (mvn test-compile)                        │
+│                                                              │
+│  Output: test-mapping.json                                  │
 └──────────────────────┬──────────────────────────────────────┘
                        │
-┌──────────────────────▼──────────────────────────────────────┐
-│  2. COMPILE PROJECT                                         │
-│     - mvn clean compile                                     │
-│     - Validates pom.xml and dependencies                    │
-│     - Ensures Java 8 compatibility                          │
-└──────────────────────┬──────────────────────────────────────┘
+                       │ ← Inspect, modify if needed
                        │
 ┌──────────────────────▼──────────────────────────────────────┐
-│  3. DETECT TEST CLASSES                                     │
-│     - Scans src/test/java/**/*.java                         │
-│     - Identifies JUnit 4/5 tests                            │
-│     - Detects @Test annotations                             │
-│     - Finds test class naming patterns                      │
-└──────────────────────┬──────────────────────────────────────┘
-                       │
-┌──────────────────────▼──────────────────────────────────────┐
-│  4. MAP TESTS TO CLASSES                                    │
-│     - Analyzes import statements                            │
-│     - Tracks class instantiations                           │
-│     - Builds test → production class mapping                │
-│     - Outputs: test-mapping.json                            │
-└──────────────────────┬──────────────────────────────────────┘
-                       │
-┌──────────────────────▼──────────────────────────────────────┐
-│  5. COMPILE TESTS                                           │
-│     - mvn test-compile                                      │
-│     - Ensures test classes build correctly                  │
-└──────────────────────┬──────────────────────────────────────┘
-                       │
-┌──────────────────────▼──────────────────────────────────────┐
-│  6. INSTRUMENT WITH DAIKON                                  │
-│     - Identifies classes to instrument                      │
-│     - Prepares Chicory configuration                        │
-│     - Sets up trace file locations                          │
-└──────────────────────┬──────────────────────────────────────┘
-                       │
-┌──────────────────────▼──────────────────────────────────────┐
-│  7. RUN TESTS WITH DAIKON                                   │
-│     - Executes each test class with Chicory                 │
-│     - Collects runtime traces (.dtrace.gz)                  │
-│     - Records variable values and relationships             │
-│     - Generates invariant files (.inv.gz)                   │
-└──────────────────────┬──────────────────────────────────────┘
-                       │
-┌──────────────────────▼──────────────────────────────────────┐
-│  8. GENERATE JML SPECIFICATIONS                             │
-│     - Converts invariants to JML format                     │
-│     - Parses invariant relationships                        │
-│     - Formats as JML annotations                            │
-└──────────────────────┬──────────────────────────────────────┘
-                       │
-┌──────────────────────▼──────────────────────────────────────┐
-│  9. DECORATE SOURCE FILES                                   │
-│     - Reads original .java files                            │
-│     - Inserts JML comments                                  │
-│     - Preserves original formatting                         │
-│     - Saves to jml-decorated-classes/                       │
+│  ANALYZE PHASE (Slow: 10-60 minutes)                       │
+│                                                              │
+│  1. Instrument classes with Daikon                          │
+│  2. Run tests with Chicory (collect traces)                 │
+│  3. Generate invariants from traces                         │
+│  4. Convert to JML specifications                           │
+│  5. Decorate source files with JML                          │
+│                                                              │
+│  Output: daikon-output/, jml-decorated-classes/             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### Component Details
+## Detailed Command Reference
 
-#### Test Detection Algorithm
+### Prepare Command
 
-The tool identifies test classes using multiple heuristics:
+Clones, compiles, and detects tests in a repository.
 
-1. **Location**: Files in `src/test/java/` directory
-2. **Imports**: Presence of JUnit imports
-   ```java
-   import org.junit.Test;
-   import org.junit.jupiter.api.Test;
-   ```
-3. **Annotations**: Methods annotated with `@Test`
-4. **Naming**: Classes ending with `Test`, `Tests`, or `TestCase`
-
-#### Test-to-Class Mapping
-
-The mapping process:
-
-1. Extracts all imports from test files
-2. Filters out JUnit and Java standard library imports
-3. Analyzes test method bodies for class instantiations
-4. Matches against production classes in `src/main/java/`
-5. Creates bidirectional mapping in `test-mapping.json`
-
-**Example Mapping**:
-```json
-{
-  "com.example.CalculatorTest": {
-    "test_file": "src/test/java/com/example/CalculatorTest.java",
-    "tested_classes": [
-      "com.example.Calculator",
-      "com.example.MathUtils"
-    ]
-  }
-}
+**Syntax:**
+```bash
+docker run [DOCKER_OPTIONS] daikon-jml:latest prepare <github-repo-url>
 ```
 
-#### Daikon Instrumentation
+**Arguments:**
+- `<github-repo-url>`: Full GitHub repository URL (e.g., `https://github.com/user/repo.git`)
 
-Uses Chicory, Daikon's front-end for Java:
+**What It Does:**
+1. Clones the repository
+2. Runs `mvn clean compile`
+3. Detects test classes (JUnit 4/5)
+4. Maps tests to production classes
+5. Runs `mvn test-compile`
 
-1. **Bytecode instrumentation**: Modifies compiled classes at runtime
-2. **Value tracking**: Records variable values at program points
-3. **Trace generation**: Creates `.dtrace.gz` files with execution traces
-4. **Invariant inference**: Analyzes traces to discover likely invariants
+**Outputs:**
+- Cloned repository in workspace
+- `test-mapping.json`: Test-to-class mapping
+- Compiled classes in `target/classes/`
+- Compiled tests in `target/test-classes/`
+
+**Example:**
+```bash
+docker run --rm -v $(pwd)/workspace:/workspace \
+  daikon-jml:latest \
+  prepare https://github.com/apache/commons-lang.git
+```
+
+**Windows:**
+```powershell
+docker run --rm -v ${PWD}/workspace:/workspace `
+  daikon-jml:latest `
+  prepare https://github.com/apache/commons-lang.git
+```
+
+### Analyze Command
+
+Runs Daikon analysis on a prepared repository.
+
+**Syntax:**
+```bash
+docker run [DOCKER_OPTIONS] daikon-jml:latest analyze <repo-name>
+```
+
+**Arguments:**
+- `<repo-name>`: Name of the repository directory (without .git extension)
+
+**Requirements:**
+- Repository must have been prepared first
+- `test-mapping.json` must exist in the repository directory
+
+**What It Does:**
+1. Instruments classes for Daikon analysis
+2. Runs tests with Chicory to collect execution traces
+3. Generates invariants from traces
+4. Converts invariants to JML format
+5. Decorates source files with JML annotations
+
+**Outputs:**
+- `daikon-output/`: Trace files (*.dtrace.gz), invariant files (*.inv.gz), JML files (*.jml)
+- `jml-decorated-classes/`: Source files with JML annotations
+- `instrumented-classes/`: Instrumentation metadata
+
+**Example:**
+```bash
+docker run --rm -v $(pwd)/workspace:/workspace \
+  daikon-jml:latest \
+  analyze commons-lang
+```
+
+**Windows:**
+```powershell
+docker run --rm -v ${PWD}/workspace:/workspace `
+  daikon-jml:latest `
+  analyze commons-lang
+```
+
+### Docker Options
+
+**Volume Mounting (Required for Persistence):**
+```bash
+-v /host/path:/workspace
+```
+Maps a directory on your machine to the container's workspace.
+
+**Remove Container After Completion:**
+```bash
+--rm
+```
+Automatically removes the container after it finishes (recommended).
+
+**Interactive Mode:**
+```bash
+-it
+```
+For debugging and manual execution.
+
+**Memory Limits:**
+```bash
+--memory="4g" --memory-swap="8g"
+```
+For large projects that need more resources.
+
+**Environment Variables:**
+```bash
+-e MAVEN_OPTS="-Xmx4g"
+```
+Pass custom settings to Maven or Daikon.
+
+## Pipeline Architecture
+
+### Prepare Phase Details
+
+```
+[1/4] Clone Repository
+      ├── git clone <github-url>
+      └── Navigate to repo directory
+
+[2/4] Compile Project
+      ├── mvn clean compile
+      ├── Validate pom.xml
+      ├── Download dependencies
+      └── Verify Java 8 compatibility
+
+[3/4] Detect Test Classes
+      ├── Scan src/test/java/**/*.java
+      ├── Identify JUnit annotations (@Test)
+      ├── Check for test naming patterns (*Test, *Tests)
+      ├── Parse imports to find tested classes
+      ├── Analyze class instantiations
+      └── Create test-mapping.json
+
+[4/4] Compile Tests
+      ├── mvn test-compile
+      └── Validate test dependencies
+```
+
+### Analyze Phase Details
+
+```
+[1/3] Instrument Classes
+      ├── Read test-mapping.json
+      ├── Identify classes to instrument
+      ├── Configure Chicory
+      └── Prepare trace file locations
+
+[2/3] Run Tests with Daikon
+      ├── For each test class:
+      │   ├── Execute with Chicory instrumentation
+      │   ├── Collect runtime traces (*.dtrace.gz)
+      │   └── Generate invariants (*.inv.gz)
+      ├── Process all trace files
+      └── Convert to JML format (*.jml)
+
+[3/3] Decorate Source Files
+      ├── For each instrumented class:
+      │   ├── Read original source
+      │   ├── Find corresponding JML specs
+      │   ├── Insert JML as comments
+      │   └── Save to jml-decorated-classes/
+      └── Preserve original formatting
+```
 
 ## Output Structure
 
-After successful execution, the repository directory contains:
+After running both phases, the repository directory contains:
 
 ```
-<repository-name>/
-│
-├── src/                          # Original source (unchanged)
-│   ├── main/java/
-│   └── test/java/
-│
-├── target/                       # Maven build output
-│   ├── classes/
-│   └── test-classes/
-│
-├── daikon-output/                # Daikon analysis results
-│   ├── com_example_Calculator.dtrace.gz      # Execution traces
-│   ├── com_example_Calculator.inv.gz         # Binary invariants
-│   ├── com_example_Calculator.jml            # JML format invariants
-│   └── ...
-│
-├── instrumented-classes/         # Instrumentation metadata
-│   └── classes-to-instrument.txt # List of instrumented classes
-│
-├── jml-decorated-classes/        # Enhanced source files
-│   └── com/example/
-│       ├── Calculator.java       # With JML annotations
-│       └── MathUtils.java
-│
-└── test-mapping.json            # Test-to-class mapping
+workspace/
+└── <repository-name>/
+    ├── src/                          # Original source (unchanged)
+    │   ├── main/java/
+    │   └── test/java/
+    │
+    ├── target/                       # Maven build output
+    │   ├── classes/
+    │   └── test-classes/
+    │
+    ├── test-mapping.json            # Created by PREPARE phase
+    │
+    ├── daikon-output/               # Created by ANALYZE phase
+    │   ├── com_example_Calculator.dtrace.gz      # Execution traces
+    │   ├── com_example_Calculator.inv.gz         # Binary invariants
+    │   ├── com_example_Calculator.jml            # JML format
+    │   └── ...
+    │
+    ├── instrumented-classes/        # Created by ANALYZE phase
+    │   └── classes-to-instrument.txt
+    │
+    └── jml-decorated-classes/       # Created by ANALYZE phase
+        └── com/example/
+            ├── Calculator.java       # With JML annotations
+            └── MathUtils.java
 ```
 
-### File Format Details
+### Key Files Explained
 
 #### test-mapping.json
+
+Maps test classes to the production classes they test:
 
 ```json
 {
@@ -404,11 +455,7 @@ Binary execution trace files containing:
 
 #### *.inv.gz
 
-Binary invariant files with:
-- Discovered invariants
-- Confidence levels
-- Statistical evidence
-- Invariant types
+Binary invariant files with discovered invariants and confidence levels.
 
 #### *.jml
 
@@ -453,104 +500,101 @@ public class BankAccount {
 }
 ```
 
-## Configuration Options
-
-### Maven Configuration
-
-If your project needs specific Maven settings, modify the Dockerfile:
-
-```dockerfile
-# Add custom Maven settings
-COPY settings.xml /root/.m2/settings.xml
-```
-
-### Daikon Memory Settings
-
-For large projects, increase Daikon's memory:
-
-Edit `entrypoint.sh`:
-```bash
-export JAVA_OPTS="-Xmx4g -Xms1g"
-```
-
-Or pass via environment:
-```bash
-docker run -e JAVA_OPTS="-Xmx4g" daikon-jml:latest <repo-url>
-```
-
-### Selective Class Instrumentation
-
-To instrument only specific packages, modify `process_project.py`:
-
-```python
-def should_instrument_class(self, class_name: str) -> bool:
-    # Only instrument classes in specific package
-    return class_name.startswith('com.mycompany.core')
-```
-
 ## Examples
 
-### Example 1: Simple Calculator Project
+### Example 1: Basic Two-Phase Analysis
 
 ```bash
-# Analyze a calculator project
-docker run --rm -v $(pwd)/results:/workspace \
+# Create workspace
+mkdir -p workspace
+
+# Prepare a simple calculator project
+docker run --rm -v $(pwd)/workspace:/workspace \
   daikon-jml:latest \
-  https://github.com/example/simple-calculator.git
+  prepare https://github.com/example/simple-calculator.git
+
+# Inspect what was found
+cat workspace/simple-calculator/test-mapping.json
+
+# Run analysis
+docker run --rm -v $(pwd)/workspace:/workspace \
+  daikon-jml:latest \
+  analyze simple-calculator
 
 # View results
-cd results/simple-calculator/jml-decorated-classes
-ls -R
+ls workspace/simple-calculator/jml-decorated-classes/
 ```
 
-**Expected Output**:
-```
-com/example/
-├── Calculator.java      # With JML: ensures result == a + b
-├── Division.java        # With JML: requires divisor != 0
-└── MathUtils.java       # With JML: class invariants
-```
-
-### Example 2: Apache Commons Lang
+### Example 2: Large Project (Apache Commons)
 
 ```bash
-# Analyze a real-world project (may take 30+ minutes)
+# Prepare phase
 docker run --rm \
-  -v $(pwd)/commons-analysis:/workspace \
-  -e MAVEN_OPTS="-Xmx4g" \
+  -v $(pwd)/workspace:/workspace \
   daikon-jml:latest \
-  https://github.com/apache/commons-lang.git
+  prepare https://github.com/apache/commons-lang.git
 
-# Check results
-du -sh commons-analysis/commons-lang/daikon-output/
-cat commons-analysis/commons-lang/test-mapping.json | jq
-```
+# Check test mapping before heavy analysis
+cat workspace/commons-lang/test-mapping.json | head -20
 
-### Example 3: Private Repository with Credentials
-
-```bash
-# For private repos, use GitHub token
+# Analyze with more memory
 docker run --rm \
-  -v $(pwd)/output:/workspace \
-  -e GIT_USERNAME="your-username" \
-  -e GIT_TOKEN="your-personal-access-token" \
+  --memory="4g" \
+  -e MAVEN_OPTS="-Xmx3g" \
+  -v $(pwd)/workspace:/workspace \
   daikon-jml:latest \
-  https://github.com/private-org/private-repo.git
+  analyze commons-lang
 ```
 
-Note: Modify `entrypoint.sh` to use credentials:
+### Example 3: Inspect Before Analysis
+
 ```bash
-if [ -n "$GIT_TOKEN" ]; then
-  git config --global credential.helper store
-  echo "https://${GIT_USERNAME}:${GIT_TOKEN}@github.com" > ~/.git-credentials
-fi
+# Prepare
+docker run --rm -v $(pwd)/workspace:/workspace \
+  daikon-jml:latest \
+  prepare https://github.com/user/repo.git
+
+# Inspect compilation
+cd workspace/repo
+mvn verify
+
+# Check test coverage
+mvn jacoco:report
+open target/site/jacoco/index.html
+
+# Review test mapping
+cat test-mapping.json | jq
+
+# Decide if coverage is sufficient, then analyze
+docker run --rm -v $(pwd)/../:/workspace \
+  daikon-jml:latest \
+  analyze repo
 ```
 
-### Example 4: Analyzing Multiple Projects
+### Example 4: Filter Tests Between Phases
+
+```bash
+# Prepare
+docker run --rm -v $(pwd)/workspace:/workspace \
+  daikon-jml:latest \
+  prepare https://github.com/user/repo.git
+
+# Edit test-mapping.json to remove slow or irrelevant tests
+cd workspace/repo
+# Remove unwanted test classes from test-mapping.json
+nano test-mapping.json
+
+# Analyze with filtered tests
+docker run --rm -v $(pwd)/../:/workspace \
+  daikon-jml:latest \
+  analyze repo
+```
+
+### Example 5: Batch Processing Multiple Projects
 
 ```bash
 #!/bin/bash
-# analyze-multiple.sh
+# batch-prepare.sh
 
 REPOS=(
   "https://github.com/user/project1.git"
@@ -558,229 +602,298 @@ REPOS=(
   "https://github.com/user/project3.git"
 )
 
+# Prepare all projects
 for repo in "${REPOS[@]}"; do
-  echo "Analyzing: $repo"
-  docker run --rm \
-    -v $(pwd)/batch-results:/workspace \
-    daikon-jml:latest \
-    "$repo"
+  echo "Preparing: $repo"
+  docker run --rm -v $(pwd)/workspace:/workspace \
+    daikon-jml:latest prepare "$repo"
 done
 
-echo "All analyses complete!"
-ls -la batch-results/
+# Analyze them later (can be run in parallel on different machines)
+for repo in project1 project2 project3; do
+  echo "Analyzing: $repo"
+  docker run --rm -v $(pwd)/workspace:/workspace \
+    daikon-jml:latest analyze "$repo"
+done
 ```
 
-### Example 5: Continuous Integration
+### Example 6: Resume After Failure
 
-`.github/workflows/daikon-analysis.yml`:
-```yaml
-name: Daikon Analysis
+```bash
+# If analyze phase fails midway
+docker run --rm -v $(pwd)/workspace:/workspace \
+  daikon-jml:latest \
+  analyze my-repo
+# ERROR at step 2/3...
 
-on:
-  push:
-    branches: [ main ]
+# Just re-run analyze phase (no need to prepare again)
+docker run --rm -v $(pwd)/workspace:/workspace \
+  daikon-jml:latest \
+  analyze my-repo
+```
 
-jobs:
-  analyze:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      
-      - name: Build Daikon Image
-        run: docker build -t daikon-jml .
-        working-directory: ./daikon-docker
-      
-      - name: Run Analysis
-        run: |
-          docker run --rm \
-            -v ${{ github.workspace }}/results:/workspace \
-            daikon-jml:latest \
-            https://github.com/${{ github.repository }}.git
-      
-      - name: Upload Results
-        uses: actions/upload-artifact@v3
-        with:
-          name: daikon-results
-          path: results/
+### Example 7: Windows PowerShell Complete Workflow
+
+```powershell
+# Create workspace
+New-Item -ItemType Directory -Force -Path workspace
+
+# Prepare
+docker run --rm -v ${PWD}/workspace:/workspace `
+  daikon-jml:latest `
+  prepare https://github.com/facebook/facebook-java-business-sdk.git
+
+# Check results
+Get-Content workspace/facebook-java-business-sdk/test-mapping.json | Select-Object -First 20
+
+# Analyze
+docker run --rm -v ${PWD}/workspace:/workspace `
+  daikon-jml:latest `
+  analyze facebook-java-business-sdk
+
+# View JML files
+Get-ChildItem workspace/facebook-java-business-sdk/jml-decorated-classes -Recurse -Filter *.java
 ```
 
 ## Advanced Usage
 
-### Extracting Specific Invariants
+### Parallel Analysis
 
 ```bash
-# Run analysis
-docker run --rm -v $(pwd)/output:/workspace \
+# Prepare multiple projects
+docker run --rm -v $(pwd)/workspace:/workspace daikon-jml:latest prepare https://github.com/user/proj1.git
+docker run --rm -v $(pwd)/workspace:/workspace daikon-jml:latest prepare https://github.com/user/proj2.git
+docker run --rm -v $(pwd)/workspace:/workspace daikon-jml:latest prepare https://github.com/user/proj3.git
+
+# Analyze in parallel (if system has resources)
+docker run --rm -v $(pwd)/workspace:/workspace daikon-jml:latest analyze proj1 &
+docker run --rm -v $(pwd)/workspace:/workspace daikon-jml:latest analyze proj2 &
+docker run --rm -v $(pwd)/workspace:/workspace daikon-jml:latest analyze proj3 &
+wait
+```
+
+### Interactive Debugging
+
+```bash
+# Prepare normally
+docker run --rm -v $(pwd)/workspace:/workspace \
   daikon-jml:latest \
-  https://github.com/user/repo.git
+  prepare https://github.com/user/repo.git
 
-# Extract method preconditions
-cd output/repo-name/daikon-output
-zcat *.inv.gz | grep "requires"
+# Start interactive session for manual analysis
+docker run -it --rm -v $(pwd)/workspace:/workspace \
+  daikon-jml:latest bash
 
-# Extract class invariants
-zcat *.inv.gz | grep "invariant"
-
-# View specific class
-zcat com_example_MyClass.inv.gz | less
+# Inside container
+cd repo
+python3 /usr/local/bin/process_project.py instrument-daikon
+python3 /usr/local/bin/process_project.py run-daikon
+# Debug specific issues
+ls -la daikon-output/
 ```
 
-### Using Daikon Print Tools
-
-Access Daikon's printing utilities:
+### Custom Analysis Script
 
 ```bash
-# Start interactive container
-docker run -it --rm -v $(pwd)/output:/workspace daikon-jml:latest bash
+#!/bin/bash
+# smart-analyze.sh
 
-# Navigate to results
-cd /workspace/repo-name/daikon-output
+REPO_URL=$1
+REPO_NAME=$(basename "$REPO_URL" .git)
 
-# Print invariants in different formats
-java -cp $DAIKONDIR/daikon.jar daikon.PrintInvariants \
-  --format java com_example_MyClass.inv.gz
+# Phase 1: Prepare
+docker run --rm -v $(pwd)/workspace:/workspace \
+  daikon-jml:latest prepare "$REPO_URL"
 
-java -cp $DAIKONDIR/daikon.jar daikon.PrintInvariants \
-  --format jml com_example_MyClass.inv.gz
+# Check test coverage
+cd workspace/$REPO_NAME
+mvn jacoco:report 2>&1 | grep "Total.*%"
 
-java -cp $DAIKONDIR/daikon.jar daikon.PrintInvariants \
-  --format dbc com_example_MyClass.inv.gz
+# Check test mapping
+TEST_COUNT=$(jq 'length' test-mapping.json)
+echo "Found $TEST_COUNT test classes"
+
+if [ "$TEST_COUNT" -lt 5 ]; then
+  echo "Warning: Low number of tests. Results may be limited."
+fi
+
+# Phase 2: Analyze
+docker run --rm -v $(pwd)/../:/workspace \
+  daikon-jml:latest analyze "$REPO_NAME"
+
+# Generate summary
+echo "=== Analysis Summary ==="
+echo "Invariant files: $(ls daikon-output/*.inv.gz 2>/dev/null | wc -l)"
+echo "JML files: $(find jml-decorated-classes -name "*.java" 2>/dev/null | wc -l)"
 ```
 
-### Filtering Invariants
+### CI/CD Integration
 
-Modify `process_project.py` to filter invariants:
+```yaml
+# .github/workflows/daikon-analysis.yml
+name: Daikon JML Analysis
 
-```python
-def filter_invariants(self, invariants: str) -> str:
-    """Keep only high-confidence invariants."""
-    filtered = []
-    for line in invariants.split('\n'):
-        # Keep only invariants with confidence > 0.99
-        if 'confidence=1.0' in line or 'confidence=0.99' in line:
-            filtered.append(line)
-    return '\n'.join(filtered)
-```
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
 
-### Custom JML Templates
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Daikon Docker
+        uses: actions/checkout@v3
+        with:
+          repository: your-org/daikon-docker
+          path: daikon-docker
+      
+      - name: Build Daikon Image
+        run: docker build -t daikon-jml daikon-docker/
+      
+      - name: Prepare Project
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}/results:/workspace \
+            daikon-jml:latest \
+            prepare https://github.com/${{ github.repository }}.git
+      
+      - name: Upload Prepared Project
+        uses: actions/upload-artifact@v3
+        with:
+          name: prepared-project
+          path: results/
+          retention-days: 1
 
-Create custom JML output formats:
-
-```python
-def format_jml_specification(self, class_name: str, invariants: List[str]) -> str:
-    """Generate formatted JML specification."""
-    template = f"""
-/**
- * Formal specification for {class_name}
- * Generated: {datetime.now().isoformat()}
- * Tool: Daikon {self.daikon_version}
- */
-/*@
- * Class Invariants:
-{self._format_invariants(invariants, '  * ')}
- *
- * @specification-for {class_name}
- */
-"""
-    return template
-```
-
-### Integration with Other Tools
-
-#### OpenJML Verification
-
-```bash
-# After generating JML
-docker run --rm -v $(pwd)/output:/workspace daikon-jml:latest <repo>
-
-# Verify with OpenJML
-cd output/repo-name/jml-decorated-classes
-openjml -esc com/example/MyClass.java
-```
-
-#### ESC/Java2 Extended Static Checking
-
-```bash
-# Convert JML to ESC/Java2 format
-java -cp $DAIKONDIR/daikon.jar daikon.PrintInvariants \
-  --format esc \
-  myclass.inv.gz > myclass.esc
+  analyze:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Prepared Project
+        uses: actions/download-artifact@v3
+        with:
+          name: prepared-project
+          path: results/
+      
+      - name: Checkout Daikon Docker
+        uses: actions/checkout@v3
+        with:
+          repository: your-org/daikon-docker
+          path: daikon-docker
+      
+      - name: Build Daikon Image
+        run: docker build -t daikon-jml daikon-docker/
+      
+      - name: Run Analysis
+        run: |
+          REPO_NAME=$(basename ${{ github.repository }})
+          docker run --rm \
+            --memory="4g" \
+            -v ${{ github.workspace }}/results:/workspace \
+            daikon-jml:latest \
+            analyze $REPO_NAME
+      
+      - name: Upload Analysis Results
+        uses: actions/upload-artifact@v3
+        with:
+          name: daikon-jml-results
+          path: |
+            results/**/daikon-output/
+            results/**/jml-decorated-classes/
+            results/**/test-mapping.json
 ```
 
 ## Troubleshooting
 
 ### Common Issues and Solutions
 
-#### Issue: "Docker: command not found"
+#### Issue: "exec /usr/local/bin/entrypoint.sh: no such file or directory"
 
-**Solution**: Install Docker for your platform
+**Causes:**
+- File wasn't copied during Docker build
+- Windows line ending issues (CRLF vs LF)
+- File not in build context
+
+**Solution:**
 ```bash
-# Ubuntu/Debian
-curl -fsSL https://get.docker.com -o get-docker.sh
-sudo sh get-docker.sh
+# Check files exist locally
+ls -la Dockerfile entrypoint.sh process_project.py
 
-# Verify
-docker --version
+# On Windows: Fix line endings
+dos2unix entrypoint.sh  # If you have dos2unix
+# OR in PowerShell:
+$content = Get-Content entrypoint.sh -Raw
+$content = $content -replace "`r`n", "`n"
+[System.IO.File]::WriteAllText("entrypoint.sh", $content)
+
+# Rebuild without cache
+docker build --no-cache -t daikon-jml:latest .
+
+# Verify file is in image
+docker run --rm daikon-jml:latest ls -la /usr/local/bin/
 ```
 
-#### Issue: "Permission denied" when building
+#### Issue: "Repository directory not found" (analyze command)
 
-**Solution**: Add your user to docker group
+**Cause:** Running analyze before prepare
+
+**Solution:**
 ```bash
-sudo usermod -aG docker $USER
-newgrp docker  # Or logout and login again
+# Always run prepare first
+docker run --rm -v $(pwd)/workspace:/workspace \
+  daikon-jml:latest \
+  prepare https://github.com/user/repo.git
+
+# Then analyze
+docker run --rm -v $(pwd)/workspace:/workspace \
+  daikon-jml:latest \
+  analyze repo
 ```
 
-#### Issue: "Repository not found or access denied"
+#### Issue: "test-mapping.json not found"
 
-**Possible causes**:
-1. Repository is private (provide credentials)
-2. URL is incorrect (check spelling)
-3. Network issues
+**Cause:** Prepare phase didn't complete successfully
 
-**Solution**:
+**Solution:**
 ```bash
-# Test Git access outside Docker
-git clone <repo-url> test-clone
-rm -rf test-clone
+# Re-run prepare and check for errors
+docker run --rm -v $(pwd)/workspace:/workspace \
+  daikon-jml:latest \
+  prepare https://github.com/user/repo.git 2>&1 | tee prepare.log
 
-# For private repos, use token
-docker run --rm \
-  -e GIT_TOKEN="your_token" \
-  daikon-jml:latest <repo-url>
+# Check the log
+cat prepare.log
 ```
 
 #### Issue: "Maven compilation failed"
 
-**Causes**:
+**Causes:**
 - Missing dependencies
 - Java version incompatibility
 - Corrupted pom.xml
 
-**Solution**:
+**Solution:**
 ```bash
-# Try compiling locally first
-git clone <repo-url>
-cd <repo-name>
+# Test compilation locally first
+git clone https://github.com/user/repo.git
+cd repo
 mvn clean compile
 
-# If successful, check Java version
-java -version  # Should be 1.8
-
-# Try with Docker again
-docker run --rm -v $(pwd)/output:/workspace \
+# If it works locally, try prepare again
+docker run --rm -v $(pwd)/../workspace:/workspace \
   daikon-jml:latest \
-  file://$(pwd)  # Use local copy
+  prepare https://github.com/user/repo.git
 ```
 
 #### Issue: "No test classes detected"
 
-**Causes**:
+**Causes:**
 - Tests in non-standard location
 - Missing JUnit annotations
 - Test dependencies not in pom.xml
 
-**Solution**:
+**Solution:**
 ```bash
 # Check test structure
 ls -R src/test/java/
@@ -788,85 +901,68 @@ ls -R src/test/java/
 # Verify JUnit in pom.xml
 grep -A5 "junit" pom.xml
 
-# Run in interactive mode to debug
-docker run -it --rm daikon-jml:latest bash
-# Then manually check tests
+# Check if tests have @Test annotations
+grep -r "@Test" src/test/java/
 ```
 
-#### Issue: "Daikon produces no invariants"
+#### Issue: "Out of memory error" during analyze
 
-**Causes**:
-- Tests don't execute target classes
-- Tests fail during execution
-- Insufficient test coverage
-
-**Solution**:
+**Solution:**
 ```bash
-# Verify tests run successfully
-mvn test
-
-# Check test coverage
-mvn jacoco:report
-
-# Run with verbose Daikon output
-# Modify entrypoint.sh to add --verbose flag
-```
-
-#### Issue: "Out of memory error"
-
-**Solution**: Increase Docker memory allocation
-```bash
-# Docker Desktop: Settings → Resources → Memory (increase to 4GB+)
-
-# Command line
+# Increase Docker memory
 docker run --rm \
   --memory="4g" \
   --memory-swap="8g" \
   -e MAVEN_OPTS="-Xmx3g" \
-  -v $(pwd)/output:/workspace \
-  daikon-jml:latest <repo-url>
+  -v $(pwd)/workspace:/workspace \
+  daikon-jml:latest \
+  analyze repo
 ```
 
-#### Issue: "JML files are empty or incomplete"
+#### Issue: Analyze phase takes too long
 
-**Causes**:
-- Daikon didn't find enough patterns
-- Tests have low coverage
-- Invariants filtered out
-
-**Solution**:
+**Solution:**
 ```bash
-# Check raw invariant files
-cd output/repo/daikon-output
-zcat *.inv.gz | head -100
+# Filter tests before analysis
+cd workspace/repo
+# Edit test-mapping.json to remove slow tests
+nano test-mapping.json
 
-# Lower confidence threshold in process_project.py
-# Or examine dtrace files
-java -cp $DAIKONDIR/daikon.jar daikon.Chicory --help
+# Or run on specific test classes only
+# Manually edit test-mapping.json to keep only fast tests
+```
+
+#### Issue: Volume not persisting (Windows)
+
+**Cause:** Incorrect path format
+
+**Solution:**
+```powershell
+# Use ${PWD} in PowerShell
+docker run --rm -v ${PWD}/workspace:/workspace ...
+
+# Or use absolute path with forward slashes
+docker run --rm -v C:/Users/YourName/workspace:/workspace ...
+
+# NOT backslashes
 ```
 
 ### Debug Mode
 
-Enable detailed logging:
+For detailed troubleshooting:
 
 ```bash
-# Modify entrypoint.sh
-set -x  # Add at top of file
+# Run interactively
+docker run -it --rm -v $(pwd)/workspace:/workspace \
+  daikon-jml:latest bash
 
-# Run with verbose output
-docker run --rm daikon-jml:latest <repo-url> 2>&1 | tee analysis.log
-
-# Review logs
-less analysis.log
+# Inside container, run commands manually
+cd /workspace
+/usr/local/bin/entrypoint.sh prepare https://github.com/user/repo.git
+# Or
+cd repo-name
+python3 /usr/local/bin/process_project.py detect-tests
 ```
-
-### Getting Help
-
-1. **Check logs**: Review console output for error messages
-2. **Inspect outputs**: Examine intermediate files (`test-mapping.json`, `.dtrace.gz`)
-3. **Test manually**: Run steps individually in interactive mode
-4. **Search issues**: Look for similar problems in Daikon documentation
-5. **Report bugs**: Provide complete error output and repository URL
 
 ## Technical Details
 
@@ -879,7 +975,553 @@ less analysis.log
 | Maven | Latest | Build tool |
 | Daikon | 5.8.18 | Invariant detection |
 | Python | 3.x | Scripting |
+| Git | Latest | VCS |
 
 ### Daikon Components
 
-- **Chicory**: Ins
+- **Chicory**: Instruments Java bytecode to collect traces
+- **DynComp**: Analyzes dynamic comparability
+- **Daikon**: Core invariant detector
+- **PrintInvariants**: Formats output to various specifications (Java, JML, ESC/Java, DBC)
+
+### Performance Characteristics
+
+| Project Size | Prepare Time | Analyze Time | Memory Usage |
+|--------------|--------------|--------------|--------------|
+| Small (< 50 classes, < 100 tests) | 1-2 min | 5-10 min | 512MB - 1GB |
+| Medium (50-200 classes, 100-500 tests) | 2-5 min | 15-30 min | 1GB - 2GB |
+| Large (200-500 classes, 500-2000 tests) | 5-10 min | 30-60 min | 2GB - 4GB |
+| Very Large (500+ classes, 2000+ tests) | 10-20 min | 1-3 hours | 4GB+ |
+
+**Note:** Analyze phase is significantly slower than prepare phase due to:
+- Runtime instrumentation overhead
+- Test execution time
+- Trace file I/O
+- Invariant inference computation
+
+### Invariant Types Detected
+
+Daikon can detect 100+ types of invariants including:
+
+**Unary invariants** (single variable):
+- `x == c` (constant value)
+- `x > c` (range)
+- `x != null` (non-null)
+- `x in {1, 2, 3}` (set membership)
+
+**Binary invariants** (two variables):
+- `x < y` (ordering)
+- `x == y` (equality)
+- `x == y + c` (linear relationship)
+- `array[i] == value` (array element)
+
+**Ternary invariants** (three variables):
+- `x == y + z` (linear combination)
+
+**Sequence invariants**:
+- `array.length > 0` (non-empty)
+- `array is sorted`
+- `array has no duplicates`
+
+**Object invariants**:
+- `obj.field != null`
+- `obj1.id == obj2.id`
+- `collection.size() == count`
+
+## Limitations
+
+### Current Limitations
+
+1. **Two-phase approach requires volume persistence**
+   - Must use `-v` flag to persist data between phases
+   - Cannot run analyze without running prepare first
+
+2. **Public repositories by default**
+   - Private repos require authentication setup
+   - Workaround: Use personal access tokens or SSH keys
+
+3. **Maven projects only**
+   - Gradle projects not supported
+   - Ant projects not supported
+
+4. **Java 8 specific**
+   - Newer Java versions may have compatibility issues
+   - Workaround: Use Java 8 compatible syntax
+
+5. **JUnit 4/5 only**
+   - TestNG not supported
+   - Custom test frameworks not supported
+   - Workaround: Convert tests to JUnit
+
+6. **Standard Maven layout required**
+   - Non-standard directory structures may fail
+   - Workaround: Restructure project or modify detection script
+
+7. **Test execution requirements**
+   - Tests must run without external dependencies
+   - No database, API, or file system dependencies during test execution
+   - Workaround: Use mocks, test containers, or embedded databases
+
+8. **Memory constraints**
+   - Very large projects may exceed memory
+   - Workaround: Increase Docker memory allocation or filter tests
+
+9. **Processing time**
+   - Large codebases can take hours
+   - No incremental analysis (must re-run entire analyze phase)
+   - Workaround: Run overnight or filter to specific modules
+
+10. **Two-phase requires same workspace**
+    - Both phases must access the same volume mount
+    - Cannot easily split phases across different machines without copying data
+
+### Known Issues
+
+- **Unicode handling**: Some non-ASCII characters in source files may cause issues
+- **Complex generics**: Deep generic type hierarchies may not be fully analyzed
+- **Dynamic class loading**: Reflectively loaded classes won't be instrumented
+- **Native methods**: JNI methods cannot be analyzed
+- **Test dependencies**: Tests that depend on each other may produce incomplete results
+- **Flaky tests**: Non-deterministic tests may produce inconsistent invariants
+
+## FAQ
+
+### General Questions
+
+**Q: Why split into two phases?**  
+A: The two-phase approach allows you to:
+- Verify compilation quickly before running intensive analysis
+- Inspect and modify test selection between phases
+- Resume analysis if it fails without re-cloning and re-compiling
+- Batch prepare multiple projects and analyze them later
+
+**Q: Can I run both phases in one command?**  
+A: Not directly, but you can create a wrapper script:
+```bash
+#!/bin/bash
+docker run --rm -v $(pwd)/workspace:/workspace daikon-jml:latest prepare $1
+REPO_NAME=$(basename $1 .git)
+docker run --rm -v $(pwd)/workspace:/workspace daikon-jml:latest analyze $REPO_NAME
+```
+
+**Q: How long does each phase take?**  
+A: 
+- **Prepare**: 1-10 minutes (depending on project size and compilation complexity)
+- **Analyze**: 10-60+ minutes (depending on number of tests and code complexity)
+
+**Q: Is my code sent anywhere?**  
+A: No, all processing happens locally in the Docker container. Nothing is uploaded.
+
+**Q: What happens to my repository after analysis?**  
+A: The cloned repository and results remain in your workspace directory. Nothing is modified on GitHub.
+
+### Technical Questions
+
+**Q: Can I run analyze multiple times on the same prepared project?**  
+A: Yes! You can re-run the analyze phase as many times as you want:
+```bash
+# Prepare once
+docker run --rm -v $(pwd)/workspace:/workspace daikon-jml:latest prepare <url>
+
+# Analyze multiple times (maybe with different settings)
+docker run --rm -v $(pwd)/workspace:/workspace daikon-jml:latest analyze <repo>
+docker run --rm --memory="8g" -v $(pwd)/workspace:/workspace daikon-jml:latest analyze <repo>
+```
+
+**Q: Can I modify test-mapping.json between phases?**  
+A: Yes! This is one of the key benefits of the two-phase approach:
+```bash
+# Prepare
+docker run --rm -v $(pwd)/workspace:/workspace daikon-jml:latest prepare <url>
+
+# Edit test-mapping.json to remove unwanted tests
+nano workspace/repo/test-mapping.json
+
+# Analyze with filtered tests
+docker run --rm -v $(pwd)/workspace:/workspace daikon-jml:latest analyze repo
+```
+
+**Q: Why Java 8 specifically?**  
+A: Daikon 5.8.18 is tested and optimized for Java 8. Newer versions may work but aren't guaranteed to be compatible.
+
+**Q: Can I use this in CI/CD?**  
+A: Yes! See the CI/CD integration example in the Advanced Usage section.
+
+**Q: How accurate are the invariants?**  
+A: Accuracy depends on test coverage. With good tests (>70% coverage), invariants are typically very accurate. However, they represent what the tests exercise, not all possible program behaviors.
+
+**Q: Can I use the generated JML for formal verification?**  
+A: Yes! The JML output is compatible with tools like OpenJML and ESC/Java2. However, you may need to manually refine some specifications.
+
+**Q: Does this modify my source code?**  
+A: No, original source is unchanged. Decorated files are saved separately in `jml-decorated-classes/`.
+
+**Q: Can I analyze only specific packages or classes?**  
+A: Yes, edit `test-mapping.json` after the prepare phase to include only the tests/classes you want to analyze.
+
+**Q: What if my tests fail during the analyze phase?**  
+A: Daikon will still try to process the traces it collected before the failure. You may get partial results.
+
+**Q: Can I run prepare and analyze on different machines?**  
+A: Yes, but you need to copy the entire workspace directory between machines:
+```bash
+# On machine 1
+docker run --rm -v $(pwd)/workspace:/workspace daikon-jml:latest prepare <url>
+tar czf workspace.tar.gz workspace/
+
+# Transfer workspace.tar.gz to machine 2
+# On machine 2
+tar xzf workspace.tar.gz
+docker run --rm -v $(pwd)/workspace:/workspace daikon-jml:latest analyze <repo>
+```
+
+**Q: How do I increase memory for large projects?**  
+A: Use Docker's `--memory` flag and set `MAVEN_OPTS`:
+```bash
+docker run --rm \
+  --memory="8g" \
+  --memory-swap="16g" \
+  -e MAVEN_OPTS="-Xmx6g" \
+  -v $(pwd)/workspace:/workspace \
+  daikon-jml:latest analyze <repo>
+```
+
+**Q: Can I run multiple analyze phases in parallel?**  
+A: Yes, if they're analyzing different repositories:
+```bash
+docker run --rm -v $(pwd)/workspace:/workspace daikon-jml:latest analyze repo1 &
+docker run --rm -v $(pwd)/workspace:/workspace daikon-jml:latest analyze repo2 &
+docker run --rm -v $(pwd)/workspace:/workspace daikon-jml:latest analyze repo3 &
+wait
+```
+
+**Q: What if prepare succeeds but analyze fails?**  
+A: You can debug and re-run just the analyze phase:
+```bash
+# Check what went wrong
+docker run -it --rm -v $(pwd)/workspace:/workspace daikon-jml:latest bash
+cd <repo>
+cat daikon-output/*.log
+
+# Fix issues (e.g., increase memory, filter tests)
+# Re-run analyze
+docker run --rm -v $(pwd)/workspace:/workspace daikon-jml:latest analyze <repo>
+```
+
+### Workflow Questions
+
+**Q: Should I always run prepare before analyze?**  
+A: Yes, analyze requires the outputs from prepare (compiled classes, test-mapping.json).
+
+**Q: Can I skip the prepare phase if I already have the repository?**  
+A: No, prepare does more than just cloning. It compiles the project and creates the test mapping. However, if you run prepare again on an existing repository, it will reuse it and just pull updates.
+
+**Q: What's the best workflow for development?**  
+A: 
+1. Run prepare once on your project
+2. Develop and modify code
+3. Re-run prepare if you add new tests or classes
+4. Run analyze whenever you want to update JML specifications
+5. Review JML output and integrate into your documentation
+
+**Q: Can I automate this in a nightly build?**  
+A: Yes! Use the CI/CD example or create a cron job:
+```bash
+#!/bin/bash
+# nightly-daikon.sh
+cd /path/to/workspace
+docker run --rm -v $(pwd):/workspace daikon-jml:latest prepare https://github.com/myorg/myrepo.git
+docker run --rm -v $(pwd):/workspace daikon-jml:latest analyze myrepo
+# Email or upload results
+```
+
+Add to crontab:
+```
+0 2 * * * /path/to/nightly-daikon.sh
+```
+
+## Platform-Specific Notes
+
+### Linux
+
+Standard commands work as documented:
+```bash
+docker run --rm -v $(pwd)/workspace:/workspace daikon-jml:latest prepare <url>
+docker run --rm -v $(pwd)/workspace:/workspace daikon-jml:latest analyze <repo>
+```
+
+### macOS
+
+Same as Linux, but be aware:
+- Docker Desktop may need increased memory allocation (Preferences → Resources → Memory)
+- File system performance may be slower with volume mounts
+- Use Docker Desktop's built-in terminal or iTerm2
+
+### Windows
+
+**PowerShell (Recommended):**
+```powershell
+docker run --rm -v ${PWD}/workspace:/workspace `
+  daikon-jml:latest `
+  prepare https://github.com/user/repo.git
+
+docker run --rm -v ${PWD}/workspace:/workspace `
+  daikon-jml:latest `
+  analyze repo
+```
+
+**Command Prompt:**
+```cmd
+docker run --rm -v %cd%\workspace:/workspace daikon-jml:latest prepare https://github.com/user/repo.git
+docker run --rm -v %cd%\workspace:/workspace daikon-jml:latest analyze repo
+```
+
+**Git Bash:**
+```bash
+docker run --rm -v $(pwd)/workspace:/workspace daikon-jml:latest prepare <url>
+docker run --rm -v $(pwd)/workspace:/workspace daikon-jml:latest analyze repo
+```
+
+**Common Windows Issues:**
+- Line ending problems: Convert `entrypoint.sh` to Unix format (LF)
+- Path format: Use forward slashes `/` in volume mounts
+- WSL2: Make sure Docker is using WSL2 backend for better performance
+
+## Best Practices
+
+### 1. Always Use Volume Mounts
+
+```bash
+# ✓ Good - results persist
+docker run --rm -v $(pwd)/workspace:/workspace daikon-jml:latest prepare <url>
+
+# ✗ Bad - results lost after container stops
+docker run --rm daikon-jml:latest prepare <url>
+```
+
+### 2. Check Test Coverage Before Analysis
+
+```bash
+# After prepare, check coverage
+cd workspace/repo
+mvn jacoco:report
+# Review target/site/jacoco/index.html
+
+# Only proceed with analyze if coverage is good
+```
+
+### 3. Start Small
+
+```bash
+# Test with a small project first
+docker run --rm -v $(pwd)/workspace:/workspace \
+  daikon-jml:latest \
+  prepare https://github.com/user/simple-calculator.git
+
+# Once comfortable, move to larger projects
+```
+
+### 4. Inspect Test Mapping
+
+```bash
+# After prepare, review what will be analyzed
+cat workspace/repo/test-mapping.json | jq
+
+# Remove tests that:
+# - Take too long
+# - Test external integrations
+# - Are flaky
+```
+
+### 5. Monitor Resources
+
+```bash
+# During analyze phase, monitor in another terminal
+docker stats
+
+# If memory usage is high, increase allocation
+docker run --rm --memory="8g" -v $(pwd)/workspace:/workspace \
+  daikon-jml:latest analyze repo
+```
+
+### 6. Keep Workspace Organized
+
+```bash
+workspace/
+├── project1/
+├── project2/
+└── project3/
+
+# Not:
+workspace/
+├── project1/
+├── project1-copy/
+├── project1-old/  # Don't keep multiple versions
+```
+
+### 7. Use Absolute Paths in Scripts
+
+```bash
+# ✓ Good
+WORKSPACE_DIR=$(pwd)/workspace
+docker run --rm -v $WORKSPACE_DIR:/workspace daikon-jml:latest prepare <url>
+
+# ✗ Bad - may break if script runs from different directory
+docker run --rm -v ./workspace:/workspace daikon-jml:latest prepare <url>
+```
+
+### 8. Document Your Workflow
+
+Create a `README.md` in your workspace:
+```markdown
+# Daikon Analysis Workspace
+
+## Last Updated
+2025-10-23
+
+## Projects Analyzed
+- project1: Prepared on 2025-10-20, Analyzed on 2025-10-21
+- project2: Prepared on 2025-10-22, Analyzed on 2025-10-23
+
+## Commands Used
+Prepare: docker run --rm -v $(pwd):/workspace daikon-jml:latest prepare <url>
+Analyze: docker run --rm --memory="4g" -v $(pwd):/workspace daikon-jml:latest analyze <repo>
+```
+
+## Contributing
+
+Contributions are welcome! Here are ways to help:
+
+### Reporting Issues
+
+When reporting issues, please include:
+- Docker version (`docker --version`)
+- Operating system
+- Complete command used
+- Error output
+- Repository URL (if public)
+- `test-mapping.json` content (if relevant)
+
+### Improving Detection
+
+Help improve test detection by:
+- Testing with diverse project structures
+- Reporting false positives/negatives
+- Contributing regex patterns for edge cases
+
+### Documentation
+
+- Fix typos or unclear sections
+- Add more examples
+- Translate to other languages
+- Create video tutorials
+
+### Code Improvements
+
+- Optimize performance
+- Add support for Gradle
+- Improve JML formatting
+- Add more output formats
+
+## License
+
+This Docker configuration is provided as-is for educational and research purposes.
+
+### Component Licenses
+
+- **Daikon**: MIT License - https://plse.cs.washington.edu/daikon/
+- **Maven**: Apache License 2.0 - https://maven.apache.org/
+- **JUnit**: Eclipse Public License - https://junit.org/
+- **Ubuntu**: Various open-source licenses
+- **OpenJDK**: GPL v2 with Classpath Exception
+
+## References
+
+- [Daikon Invariant Detector](https://plse.cs.washington.edu/daikon/) - Official Daikon website
+- [Daikon User Manual](https://plse.cs.washington.edu/daikon/download/doc/daikon.html) - Complete documentation
+- [JML (Java Modeling Language)](https://www.openjml.org/) - JML specification
+- [OpenJML](https://www.openjml.org/) - JML verification tool
+- [Maven Documentation](https://maven.apache.org/guides/) - Maven guides
+- [JUnit 5 Documentation](https://junit.org/junit5/docs/current/user-guide/) - JUnit 5 guide
+- [Docker Documentation](https://docs.docker.com/) - Docker reference
+
+## Citation
+
+If you use this tool in academic research, please cite:
+
+```bibtex
+@misc{daikon-jml-docker,
+  title={JavaISA: Daikon JML Instrumentation Docker Tool},
+  author={Juan Carlos Recio Abad},
+  year={2025},
+  howpublished={\url{https://github.com/jcrecio/JavaISA}}
+}
+```
+
+And cite the original Daikon paper:
+
+```bibtex
+@inproceedings{Ernst2007,
+  author = {Ernst, Michael D. and Perkins, Jeff H. and Guo, Philip J. and McCamant, Stephen and Pacheco, Carlos and Tschantz, Matthew S. and Xiao, Chen},
+  title = {The Daikon System for Dynamic Detection of Likely Invariants},
+  booktitle = {Science of Computer Programming},
+  year = {2007},
+  volume = {69},
+  number = {1-3},
+  pages = {35--45}
+}
+```
+
+## Acknowledgments
+
+- Daikon development team at MIT and University of Washington
+- JML community
+- Apache Maven project
+- JUnit team
+- Docker community
+
+## Support
+
+For issues and questions:
+
+1. **Check this README** for common solutions
+2. **Review Troubleshooting section** for known issues
+3. **Search Daikon documentation** for Daikon-specific questions
+4. **Open an issue** on GitHub with detailed information
+5. **Community forums** for general Docker/Maven/Java questions
+
+## Changelog
+
+### Version 2.0.0 (2025-10-23)
+- **BREAKING**: Split workflow into two phases (prepare and analyze)
+- Added ability to inspect and modify test mapping between phases
+- Improved error handling and reporting
+- Added support for resuming failed analysis
+- Enhanced documentation with two-phase examples
+
+### Version 1.0.0 (Initial Release)
+- Single-phase pipeline
+- Automatic test detection
+- JML generation
+- Basic Docker setup
+
+## Roadmap
+
+Future enhancements planned:
+
+- [ ] Support for Gradle projects
+- [ ] Incremental analysis (only analyze changed classes)
+- [ ] Web UI for viewing results
+- [ ] Integration with IDE plugins
+- [ ] Support for Java 11+ projects
+- [ ] Parallel test execution
+- [ ] Custom invariant filters
+- [ ] Export to additional formats (Alloy, Z3, etc.)
+- [ ] Docker Compose for multi-container setup
+- [ ] Pre-built Docker images on Docker Hub
+
+---
+
+**Last Updated**: October 23, 2025 
+**Version**: 2.0.0  
+**Maintainer**: Juan Carlos Recio Abad <jcrecio@uma.es>
