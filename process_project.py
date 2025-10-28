@@ -5,12 +5,89 @@
 # Date: 2025-10-19
 
 import os
+import signal
 import sys
 import json
 import re
 import subprocess
 from pathlib import Path
+import time
+from timeit import Timer
 from typing import Dict, List, Set
+
+
+def print_flush(text):
+    print(text, flush=True)
+
+
+def run_command_with_output(command, execution_dir=None, timeout=None):
+    full_output = []
+    full_error = []
+
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+        universal_newlines=True,
+        cwd=execution_dir,
+        env=os.environ.copy(),
+        shell=True,
+        preexec_fn=None if timeout is None else os.setsid,
+    )
+
+    def kill_process():
+        try:
+            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+            time.sleep(1)
+            if process.poll() is None:
+                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+    timer = None
+    if timeout:
+        timer = Timer(timeout, kill_process)
+        timer.start()
+
+    try:
+        while True:
+            output = process.stdout.readline()
+            error = process.stderr.readline()
+
+            if not output and not error and process.poll() is not None:
+                break
+
+            if output:
+                print_flush(output.rstrip())
+                full_output.append(output)
+                sys.stdout.flush()
+
+            if error:
+                print(error.rstrip(), file=sys.stderr)
+                full_error.append(error)
+                sys.stderr.flush()
+
+        return_code = process.poll()
+
+        if timer and timer.is_alive():
+            timer.cancel()
+
+        if return_code is None:
+            raise TimeoutError(f"Command execution timed out after {timeout} seconds")
+
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=return_code,
+            stdout="".join(full_output),
+            stderr="".join(full_error),
+        )
+    finally:
+        if timer:
+            timer.cancel()
+        if process.poll() is None:
+            kill_process()
 
 
 class DaikonJMLProcessor:
@@ -94,14 +171,14 @@ class DaikonJMLProcessor:
 
     def detect_tests(self):
         """Detect test classes and map them to the classes they test."""
-        print("Scanning project structure...")
+        print_flush("Scanning project structure...")
 
         # Find all test files
         test_files = self.find_java_files(self.src_test)
         main_files = self.find_java_files(self.src_main)
 
-        print(f"Found {len(test_files)} test files")
-        print(f"Found {len(main_files)} main source files")
+        print_flush(f"Found {len(test_files)} test files")
+        print_flush(f"Found {len(main_files)} main source files")
 
         # Parse all files
         test_info = [self.parse_imports_and_classes(f) for f in test_files]
@@ -142,11 +219,11 @@ class DaikonJMLProcessor:
         with open("test-mapping.json", "w") as f:
             json.dump(test_mapping, f, indent=2)
 
-        print(f"\n✓ Detected {len(test_mapping)} test classes")
+        print_flush(f"\n✓ Detected {len(test_mapping)} test classes")
         for test_cls, info in test_mapping.items():
-            print(f"  • {test_cls}")
+            print_flush(f"  • {test_cls}")
             for tested in info["tested_classes"]:
-                print(f"    → tests: {tested}")
+                print_flush(f"    → tests: {tested}")
 
         return test_mapping
 
@@ -168,7 +245,7 @@ class DaikonJMLProcessor:
 
     def instrument_with_daikon(self):
         """Instrument classes with Daikon's DynComp and Chicory."""
-        print("Reading test mapping...")
+        print_flush("Reading test mapping...")
         with open("test-mapping.json", "r") as f:
             test_mapping = json.load(f)
 
@@ -177,23 +254,23 @@ class DaikonJMLProcessor:
         for info in test_mapping.values():
             classes_to_instrument.update(info["tested_classes"])
 
-        print(f"Will instrument {len(classes_to_instrument)} classes")
+        print_flush(f"Will instrument {len(classes_to_instrument)} classes")
 
         # Save list for later use
         with open("classes-to-instrument.txt", "w") as f:
             for cls in sorted(classes_to_instrument):
                 f.write(f"{cls}\n")
 
-        print("✓ Classes prepared for instrumentation")
+        print_flush("✓ Classes prepared for instrumentation")
 
     def run_daikon_on_tests(self):
         """Run tests with Daikon to collect invariants."""
-        print("Reading test mapping...")
+        print_flush("Reading test mapping...")
         with open("test-mapping.json", "r") as f:
             test_mapping = json.load(f)
 
         if not test_mapping:
-            print("No test classes found to run")
+            print_flush("No test classes found to run")
             return
 
         # Get classpath
@@ -202,84 +279,131 @@ class DaikonJMLProcessor:
 
         # Run tests with Chicory instrumentation
         for test_class in test_mapping.keys():
-            print(f"\nRunning Daikon on: {test_class}")
+            print_flush(f"\nRunning Daikon on: {test_class}")
 
             dtrace_file = (
                 self.daikon_output / f"{test_class.replace('.', '_')}.dtrace.gz"
             )
 
             # Run with Chicory
-            cmd = [
-                "java",
-                "-cp",
-                f"{daikon_jar}:{classpath}",
-                "daikon.Chicory",
-                "--daikon-online",
-                f"--dtrace-file={dtrace_file}",
-                "org.junit.runner.JUnitCore",
-                test_class,
-            ]
+            # cmd = [
+            #     "java",
+            #     "-cp",
+            #     f"{daikon_jar}:{classpath}",
+            #     "daikon.Chicory",
+            #     "--daikon-online",
+            #     f"--dtrace-file={dtrace_file}",
+            #     "org.junit.runner.JUnitCore",
+            #     test_class,
+            # ]
 
-            print(f"  Command: {' '.join(cmd)}")
+            classpath = f"{daikon_jar}:{classpath}"
+            cmd = (
+                f"java -cp '{classpath}' daikon.Chicory "
+                f"--daikon-online --dtrace-file={dtrace_file} "
+                f"org.junit.runner.JUnitCore {test_class}"
+            )
 
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            print_flush(f"  Command: {' '.join(cmd)}")
 
+            result = subprocess.run(cmd, shell=True, check=True)
+
+            # result = run_command_with_output(cmd)
+            # result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode == 0 or "OK" in result.stdout:
-                print(f"  ✓ Collected invariants for {test_class}")
+                print_flush(f"  ✓ Collected invariants for {test_class}")
             else:
-                print(f"  ⚠ Warning: Test execution had issues")
+                print_flush(f"  ⚠ Warning: Test execution had issues")
                 if result.stdout:
-                    print(f"  stdout: {result.stdout[:200]}")
+                    print_flush(f"  stdout: {result.stdout[:200]}")
                 if result.stderr:
-                    print(f"  stderr: {result.stderr[:200]}")
+                    print_flush(f"  stderr: {result.stderr[:200]}")
 
         # Process dtrace files to generate invariants
-        print("\nGenerating invariants from trace files...")
+        print_flush("\nGenerating invariants from trace files...")
         dtrace_files = list(self.daikon_output.glob("*.dtrace.gz"))
 
         for dtrace in dtrace_files:
             inv_file = dtrace.with_suffix("").with_suffix(".inv.gz")
             jml_file = dtrace.with_suffix("").with_suffix(".jml")
 
-            cmd = [
-                "java",
-                "-cp",
-                daikon_jar,
-                "daikon.Daikon",
-                "--format",
-                "java",
-                "--output",
-                str(inv_file),
-                str(dtrace),
-            ]
+            classpath = f"{daikon_jar}:{classpath}"
+            cmd = (
+                f"java -cp '{classpath}' daikon.Daikon "
+                f"--format java --output {str(inv_file)} {str(dtrace)}"
+            )
+
+            # cmd = [
+            #     "java",
+            #     "-cp",
+            #     daikon_jar,
+            #     "daikon.Daikon",
+            #     "--format",
+            #     "java",
+            #     "--output",
+            #     str(inv_file),
+            #     str(dtrace),
+            # ]
 
             subprocess.run(cmd, capture_output=True)
 
             # Also generate JML format
-            cmd_jml = [
-                "java",
-                "-cp",
-                daikon_jar,
-                "daikon.Daikon",
-                "--format",
-                "jml",
-                "--output",
-                str(jml_file),
-                str(dtrace),
-            ]
+            # cmd_jml = [
+            #     "java",
+            #     "-cp",
+            #     daikon_jar,
+            #     "daikon.Daikon",
+            #     "--format",
+            #     "jml",
+            #     "--output",
+            #     str(jml_file),
+            #     str(dtrace),
+            # ]
+
+            cmd_jml = (
+                f"java -cp '{classpath}' daikon.Daikon "
+                f"--format jml --output {str(jml_file)} {str(dtrace)}"
+            )
 
             subprocess.run(cmd_jml, capture_output=True)
 
             if inv_file.exists():
-                print(f"  ✓ Generated invariants: {inv_file.name}")
+                print_flush(f"  ✓ Generated invariants: {inv_file.name}")
+
+    def find_source_file(self, class_name: str) -> Path:
+        """Find source file for a class, handling both FQN and simple names."""
+        # Try as fully qualified name first
+        cls_path = class_name.replace(".", "/") + ".java"
+        src_file = self.src_main / cls_path
+
+        if src_file.exists():
+            return src_file
+
+        # If not found, try to find by simple class name
+        simple_name = class_name.split(".")[-1]
+        matching_files = list(self.src_main.rglob(f"{simple_name}.java"))
+
+        if matching_files:
+            if len(matching_files) == 1:
+                return matching_files[0]
+            else:
+                # Multiple matches, try to find best match
+                for match in matching_files:
+                    # Check if the full path contains the package structure
+                    if class_name.replace(".", "/") in str(match):
+                        return match
+                # Return first match as fallback
+                return matching_files[0]
+
+        return None
 
     def generate_jml_decorations(self):
         """Decorate original classes with JML annotations."""
-        print("Generating JML decorated classes...")
+        print_flush("Generating JML decorated classes...")
 
         # Read which classes were instrumented
         if not Path("classes-to-instrument.txt").exists():
-            print("No classes to decorate")
+            print_flush("No classes to decorate")
             return
 
         with open("classes-to-instrument.txt", "r") as f:
@@ -289,21 +413,29 @@ class DaikonJMLProcessor:
         jml_files = list(self.daikon_output.glob("*.jml"))
 
         if not jml_files:
-            print("⚠ No JML files found. Attempting to generate from invariants...")
+            print_flush(
+                "⚠ No JML files found. Attempting to generate from invariants..."
+            )
             inv_files = list(self.daikon_output.glob("*.inv.gz"))
 
             daikon_jar = os.path.join(os.environ["DAIKONDIR"], "daikon.jar")
             for inv_file in inv_files:
                 jml_file = inv_file.with_suffix("").with_suffix(".jml")
-                cmd = [
-                    "java",
-                    "-cp",
-                    daikon_jar,
-                    "daikon.PrintInvariants",
-                    "--format",
-                    "jml",
-                    str(inv_file),
-                ]
+
+                cmd = (
+                    f"java -cp {daikon_jar} daikon.PrintInvariants "
+                    f"--format jml {str(inv_file)}"
+                )
+
+                # cmd = [
+                #     "java",
+                #     "-cp",
+                #     daikon_jar,
+                #     "daikon.PrintInvariants",
+                #     "--format",
+                #     "jml",
+                #     str(inv_file),
+                # ]
 
                 result = subprocess.run(cmd, capture_output=True, text=True)
                 if result.stdout:
@@ -311,13 +443,16 @@ class DaikonJMLProcessor:
                     jml_files.append(jml_file)
 
         # Parse JML and decorate source files
+        decorated_count = 0
+        not_found_count = 0
+
         for cls_name in classes_to_decorate:
             # Find the source file
-            cls_path = cls_name.replace(".", "/") + ".java"
-            src_file = self.src_main / cls_path
+            src_file = self.find_source_file(cls_name)
 
-            if not src_file.exists():
-                print(f"  ⚠ Source file not found: {src_file}")
+            if not src_file:
+                print_flush(f"  ⚠ Source file not found for: {cls_name}")
+                not_found_count += 1
                 continue
 
             # Read original source
@@ -331,12 +466,19 @@ class DaikonJMLProcessor:
                 original_content, jml_content
             )
 
-            # Save decorated version
-            decorated_file = self.jml_dir / cls_path
+            # Save decorated version - preserve the original path structure
+            relative_path = src_file.relative_to(self.src_main)
+            decorated_file = self.jml_dir / relative_path
             decorated_file.parent.mkdir(parents=True, exist_ok=True)
             decorated_file.write_text(decorated_content, encoding="utf-8")
 
-            print(f"  ✓ Decorated: {cls_name}")
+            print_flush(f"  ✓ Decorated: {cls_name}")
+            decorated_count += 1
+
+        print_flush(f"\nDecoration summary:")
+        print_flush(f"  ✓ Successfully decorated: {decorated_count}")
+        if not_found_count > 0:
+            print_flush(f"  ⚠ Source files not found: {not_found_count}")
 
     def find_jml_for_class(self, class_name: str, jml_files: List[Path]) -> str:
         """Find JML specifications for a specific class."""
@@ -389,12 +531,12 @@ class DaikonJMLProcessor:
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: process_project.py <command>")
-        print("Commands:")
-        print("  detect-tests     - Detect test classes and their targets")
-        print("  instrument-daikon - Prepare classes for Daikon instrumentation")
-        print("  run-daikon       - Run tests with Daikon to collect invariants")
-        print("  generate-jml     - Generate JML decorated classes")
+        print_flush("Usage: process_project.py <command>")
+        print_flush("Commands:")
+        print_flush("  detect-tests     - Detect test classes and their targets")
+        print_flush("  instrument-daikon - Prepare classes for Daikon instrumentation")
+        print_flush("  run-daikon       - Run tests with Daikon to collect invariants")
+        print_flush("  generate-jml     - Generate JML decorated classes")
         sys.exit(1)
 
     processor = DaikonJMLProcessor()
@@ -409,7 +551,7 @@ def main():
     elif command == "generate-jml":
         processor.generate_jml_decorations()
     else:
-        print(f"Unknown command: {command}")
+        print_flush(f"Unknown command: {command}")
         sys.exit(1)
 
 
