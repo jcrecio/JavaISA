@@ -770,7 +770,7 @@ docker run --rm --memory="10g" -v $(pwd)/../:/workspace \
   daikon-jml:latest \
   analyze critical-system
 
-# The generated JML can now be used as input for Phase 2 (Java/JML → IR)
+# The generated JML can now be used as input for Phase 2 (Java/JML → Why3)
 # and Phase 3 (IR → Isabelle/HOL) of the complete workflow
 ```
 
