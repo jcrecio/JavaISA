@@ -1,7 +1,6 @@
 #!/bin/bash
 
 # Author: Juan Carlos Recio Abad
-# Date: 2025-10-19
 
 set -e
 
