@@ -3,6 +3,7 @@
 A comprehensive Docker-based tool for automatically generating JML (Java Modeling Language) specifications from Java code using the Daikon invariant detector. This tool is the **first step in a novel workflow** for translating object-oriented Java programs into formal Isabelle/HOL specifications for automated theorem proving and verification.
 
 ⚠️This project is the continuation of the archived repository https://github.com/jcrecio/java2jml
+❗Pending to integrate with auto generation of unit tests with Evosuite
 
 ## Table of Contents
 
