@@ -3,6 +3,7 @@
 # -*- coding: utf-8 -*-
 # Author: Juan Carlos Recio Abad
 # Date: 2025-10-19
+# Modified: Added DynComp support for better memory usage and invariant quality
 
 import os
 import signal
@@ -98,10 +99,12 @@ class DaikonJMLProcessor:
         self.target_classes = self.project_root / "target" / "classes"
         self.target_test_classes = self.project_root / "target" / "test-classes"
         self.daikon_output = self.project_root / "daikon-output"
+        self.dyncomp_output = self.project_root / "dyncomp-output"
         self.instrumented_dir = self.project_root / "instrumented-classes"
         self.jml_dir = self.project_root / "jml-decorated-classes"
 
         self.daikon_output.mkdir(exist_ok=True)
+        self.dyncomp_output.mkdir(exist_ok=True)
         self.instrumented_dir.mkdir(exist_ok=True)
         self.jml_dir.mkdir(exist_ok=True)
 
@@ -151,21 +154,50 @@ class DaikonJMLProcessor:
 
         return has_junit and (has_test_annotation or has_test_name)
 
-    def detect_tested_classes(self, test_file_info: Dict) -> Set[str]:
+    def detect_tested_classes(
+        self, test_file_info: Dict, main_classes_map: Dict
+    ) -> Set[str]:
         """Detect which classes are being tested based on imports and usage."""
         content = test_file_info["file"].read_text(encoding="utf-8", errors="ignore")
         tested_classes = set()
 
         # Get all imported classes from the main source
         for imp in test_file_info["imports"]:
-            if not any(x in imp for x in ["junit", "org.junit", "java.", "javax."]):
-                tested_classes.add(imp)
+            if not any(
+                x in imp
+                for x in [
+                    "junit",
+                    "org.junit",
+                    "java.",
+                    "javax.",
+                    "org.mockito",
+                    "org.hamcrest",
+                ]
+            ):
+                # Check if this import matches a known main class
+                if imp in main_classes_map:
+                    tested_classes.add(imp)
+                else:
+                    # Try the last part (simple class name)
+                    simple_name = imp.split(".")[-1]
+                    if simple_name in main_classes_map:
+                        # Get the full qualified name
+                        info = main_classes_map[simple_name]
+                        fqn = (
+                            f"{info['package']}.{simple_name}"
+                            if info["package"]
+                            else simple_name
+                        )
+                        tested_classes.add(fqn)
 
         # Also check for class instantiations in the test
         class_instantiations = re.findall(r"new\s+(\w+)\s*\(", content)
         for cls in class_instantiations:
             if cls[0].isupper():  # Class names typically start with uppercase
-                tested_classes.add(cls)
+                if cls in main_classes_map:
+                    info = main_classes_map[cls]
+                    fqn = f"{info['package']}.{cls}" if info["package"] else cls
+                    tested_classes.add(fqn)
 
         return tested_classes
 
@@ -199,13 +231,18 @@ class DaikonJMLProcessor:
             if not self.is_test_class(test_info_item):
                 continue
 
-            tested = self.detect_tested_classes(test_info_item)
+            tested = self.detect_tested_classes(test_info_item, main_classes_map)
 
             for test_class in test_info_item["classes"]:
-                test_fqn = f"{test_info_item['package']}.{test_class}"
+                test_fqn = (
+                    f"{test_info_item['package']}.{test_class}"
+                    if test_info_item["package"]
+                    else test_class
+                )
                 matched_classes = []
 
                 for tested_cls in tested:
+                    # Ensure we're storing the fully qualified name
                     if tested_cls in main_classes_map:
                         matched_classes.append(tested_cls)
 
@@ -229,19 +266,24 @@ class DaikonJMLProcessor:
 
     def get_classpath(self) -> str:
         """Build the full classpath including all dependencies."""
-        _ = subprocess.run(
-            ["mvn", "dependency:build-classpath", "-Dmdep.outputFile=cp.txt"],
+        cp_file = self.project_root / "daikon-cp.txt"
+
+        result = subprocess.run(
+            ["mvn", "dependency:build-classpath", f"-Dmdep.outputFile={cp_file}"],
             capture_output=True,
             text=True,
+            cwd=str(self.project_root),
         )
 
-        cp_file = self.project_root / "cp.txt"
         if cp_file.exists():
             classpath = cp_file.read_text().strip()
-            cp_file.unlink()
-            return f"{self.target_classes}:{self.target_test_classes}:{classpath}"
-
-        return f"{self.target_classes}:{self.target_test_classes}"
+            full_cp = f"{self.target_classes}:{self.target_test_classes}:{classpath}"
+            return full_cp
+        else:
+            print_flush(
+                "⚠ Warning: Could not build dependency classpath, using minimal classpath"
+            )
+            return f"{self.target_classes}:{self.target_test_classes}"
 
     def instrument_with_daikon(self):
         """Instrument classes with Daikon's DynComp and Chicory."""
@@ -263,8 +305,128 @@ class DaikonJMLProcessor:
 
         print_flush("✓ Classes prepared for instrumentation")
 
+    def run_dyncomp_phase(
+        self, test_class: str, comp_file: Path, classpath: str, daikon_jar: str
+    ) -> bool:
+        """Run DynComp to compute comparability information."""
+
+        print_flush(f"    Running DynComp for comparability analysis...")
+
+        cmd = (
+            f"java -Xmx2g -cp '{daikon_jar}:{classpath}' daikon.DynComp "
+            f"--comparability-file={comp_file} "
+            f"org.junit.runner.JUnitCore {test_class}"
+        )
+
+        try:
+            result = subprocess.run(
+                cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=300,
+                cwd=str(self.project_root),
+                env=os.environ.copy(),
+            )
+
+            if comp_file.exists() and comp_file.stat().st_size > 0:
+                print_flush(
+                    f"    ✓ DynComp completed ({comp_file.stat().st_size / 1024:.1f} KB)"
+                )
+                return True
+            else:
+                if result.stderr and len(result.stderr) > 0:
+                    # Show brief error
+                    error_lines = result.stderr.split("\n")[:3]
+                    for line in error_lines:
+                        if line.strip() and "at " not in line:
+                            print_flush(f"    Error: {line[:100]}")
+                print_flush(f"    ⚠ DynComp file not created or empty")
+                return False
+
+        except subprocess.TimeoutExpired:
+            print_flush(f"    ⚠ DynComp timeout")
+            return False
+        except Exception as e:
+            print_flush(f"    ✗ DynComp exception: {str(e)[:100]}")
+            return False
+
+    def run_single_test_with_chicory(
+        self,
+        test_class: str,
+        dtrace_file: Path,
+        decls_file: Path,
+        classpath: str,
+        daikon_jar: str,
+    ) -> bool:
+        """Run a single test class with Chicory instrumentation."""
+
+        # Use relative path from project root
+        dtrace_relative = dtrace_file.name
+        dtrace_full_path = self.daikon_output / dtrace_relative
+
+        cmd = (
+            f"java -Xmx4g "  # Increased to 4GB
+            f"-cp '{daikon_jar}:{classpath}' "
+            f"daikon.Chicory "
+            f"--dtrace-file=daikon-output/{dtrace_relative} "
+            f"org.junit.runner.JUnitCore {test_class}"
+        )
+
+        try:
+            # Increased timeout to 10 minutes for complex tests
+            result = subprocess.run(
+                cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=600,  # 10 minutes
+                cwd=str(self.project_root),
+                env=os.environ.copy(),
+            )
+
+            # Show test results
+            if result.stdout:
+                for line in result.stdout.split("\n"):
+                    if "OK" in line or "FAILURES" in line or "Time:" in line:
+                        print_flush(f"    {line.strip()}")
+
+            # Check if trace file was created
+            if dtrace_full_path.exists():
+                file_size = dtrace_full_path.stat().st_size
+                if file_size > 0:
+                    print_flush(f"    ✓ Trace: {file_size / 1024:.1f} KB")
+                    return True
+                else:
+                    print_flush(f"    ⚠ Trace file empty")
+                    return False
+            else:
+                print_flush(f"    ✗ No trace file")
+                return False
+
+        except subprocess.TimeoutExpired:
+            print_flush(f"    ⚠ Timeout (10 min) - test too complex, skipping")
+            # Check if partial trace was created
+            if dtrace_full_path.exists():
+                file_size = dtrace_full_path.stat().st_size
+                if file_size > 0:
+                    print_flush(
+                        f"    ℹ Partial trace created: {file_size / 1024:.1f} KB"
+                    )
+                    return True  # Use partial trace
+            return False
+        except Exception as e:
+            print_flush(f"    ✗ Exception: {str(e)[:100]}")
+            return False
+
+    def check_dyncomp_available(self) -> bool:
+        """Check if DynComp runtime is available."""
+        daikon_dir = os.environ.get("DAIKONDIR", "/opt/daikon-5.8.18")
+        dcomp_rt_jar = Path(daikon_dir) / "java" / "dcomp_rt.jar"
+        return dcomp_rt_jar.exists()
+
     def run_daikon_on_tests(self):
-        """Run tests with Daikon to collect invariants."""
+        """Run tests with Daikon to collect invariants (3-phase process with DynComp if available)."""
         print_flush("Reading test mapping...")
         with open("test-mapping.json", "r") as f:
             test_mapping = json.load(f)
@@ -273,102 +435,222 @@ class DaikonJMLProcessor:
             print_flush("No test classes found to run")
             return
 
+        print_flush(f"Will analyze {len(test_mapping)} test classes")
+
         # Get classpath
+        print_flush("Building classpath...")
         classpath = self.get_classpath()
         daikon_jar = os.path.join(os.environ["DAIKONDIR"], "daikon.jar")
 
-        # Run tests with Chicory instrumentation
+        # Verify Daikon jar exists
+        if not os.path.exists(daikon_jar):
+            print_flush(f"ERROR: Daikon jar not found at {daikon_jar}")
+            return
+
+        # Check if DynComp is available
+        dyncomp_available = self.check_dyncomp_available()
+
+        if dyncomp_available:
+            print_flush("✓ DynComp runtime detected - will use 3-phase analysis")
+        else:
+            print_flush(
+                "⚠ DynComp runtime not available - will use 2-phase analysis (Chicory only)"
+            )
+            print_flush("  This will use more memory but still works")
+
+        total_tests = len(test_mapping)
+
+        # ===================================================================
+        # PHASE 1: DynComp Comparability Analysis (if available)
+        # ===================================================================
+        dyncomp_success = 0
+        dyncomp_failed = 0
+
+        if dyncomp_available:
+            print_flush("\n" + "=" * 70)
+            print_flush("PHASE 1: DynComp Comparability Analysis")
+            print_flush("=" * 70)
+
+            current = 0
+
+            for test_class in test_mapping.keys():
+                current += 1
+                print_flush(f"\n[{current}/{total_tests}] DynComp: {test_class}")
+
+                comp_file = (
+                    self.dyncomp_output / f"{test_class.replace('.', '_')}.decls"
+                )
+
+                success = self.run_dyncomp_phase(
+                    test_class, comp_file, classpath, daikon_jar
+                )
+
+                if success:
+                    dyncomp_success += 1
+                else:
+                    dyncomp_failed += 1
+
+            print_flush(
+                f"\nDynComp summary: {dyncomp_success} successful, {dyncomp_failed} failed"
+            )
+        else:
+            print_flush("\nSkipping DynComp phase (runtime not available)")
+
+        # ===================================================================
+        # PHASE 2: Chicory Trace Collection
+        # ===================================================================
+        print_flush("\n" + "=" * 70)
+        if dyncomp_available:
+            print_flush("PHASE 2: Chicory Trace Collection (using DynComp results)")
+        else:
+            print_flush("PHASE 1: Chicory Trace Collection (without DynComp)")
+        print_flush("=" * 70)
+        print_flush("Will instrument all packages except tests and standard libraries")
+
+        success_count = 0
+        error_count = 0
+        current = 0
+
         for test_class in test_mapping.keys():
-            print_flush(f"\nRunning Daikon on: {test_class}")
+            current += 1
+            print_flush(f"\n[{current}/{total_tests}] Chicory: {test_class}")
 
             dtrace_file = (
                 self.daikon_output / f"{test_class.replace('.', '_')}.dtrace.gz"
             )
+            decls_file = self.dyncomp_output / f"{test_class.replace('.', '_')}.decls"
 
-            # Run with Chicory
-            # cmd = [
-            #     "java",
-            #     "-cp",
-            #     f"{daikon_jar}:{classpath}",
-            #     "daikon.Chicory",
-            #     "--daikon-online",
-            #     f"--dtrace-file={dtrace_file}",
-            #     "org.junit.runner.JUnitCore",
-            #     test_class,
-            # ]
+            # Use DynComp results if available
+            if dyncomp_available and not decls_file.exists():
+                print_flush(f"    ⚠ No DynComp data for this test")
 
-            classpath = f"{daikon_jar}:{classpath}"
-            cmd = (
-                f"java -cp '{classpath}' daikon.Chicory "
-                f"--daikon-online --dtrace-file={dtrace_file} "
-                f"org.junit.runner.JUnitCore {test_class}"
+            success = self.run_single_test_with_chicory(
+                test_class, dtrace_file, decls_file, classpath, daikon_jar
             )
 
-            print_flush(f"  Command: {' '.join(cmd)}")
-
-            result = subprocess.run(cmd, shell=True, check=True)
-
-            # result = run_command_with_output(cmd)
-            # result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode == 0 or "OK" in result.stdout:
-                print_flush(f"  ✓ Collected invariants for {test_class}")
+            if success:
+                file_size = dtrace_file.stat().st_size
+                print_flush(f"  ✓ Trace collected ({file_size / 1024:.1f} KB)")
+                success_count += 1
             else:
-                print_flush(f"  ⚠ Warning: Test execution had issues")
-                if result.stdout:
-                    print_flush(f"  stdout: {result.stdout[:200]}")
-                if result.stderr:
-                    print_flush(f"  stderr: {result.stderr[:200]}")
+                print_flush(f"  ✗ Failed to collect trace")
+                error_count += 1
 
-        # Process dtrace files to generate invariants
-        print_flush("\nGenerating invariants from trace files...")
+        print_flush(f"\nTrace collection summary:")
+        print_flush(f"  ✓ Successful: {success_count}/{total_tests}")
+        if error_count > 0:
+            print_flush(f"  ⚠ Errors: {error_count}/{total_tests}")
+
+        # ===================================================================
+        # PHASE 3: Invariant Generation
+        # ===================================================================
+        print_flush("\n" + "=" * 70)
+        if dyncomp_available:
+            print_flush("PHASE 3: Invariant Generation from Traces")
+        else:
+            print_flush("PHASE 2: Invariant Generation from Traces")
+        print_flush("=" * 70)
+
         dtrace_files = list(self.daikon_output.glob("*.dtrace.gz"))
+
+        if not dtrace_files:
+            print_flush("⚠ No trace files were generated.")
+            return
+
+        print_flush(f"Found {len(dtrace_files)} trace files to process")
+
+        inv_count = 0
+        jml_count = 0
 
         for dtrace in dtrace_files:
             inv_file = dtrace.with_suffix("").with_suffix(".inv.gz")
             jml_file = dtrace.with_suffix("").with_suffix(".jml")
 
-            classpath = f"{daikon_jar}:{classpath}"
-            cmd = (
-                f"java -cp '{classpath}' daikon.Daikon "
-                f"--format java --output {str(inv_file)} {str(dtrace)}"
+            print_flush(f"  Processing: {dtrace.name}")
+
+            try:
+                # First, let's try to process the dtrace file and see what Daikon produces
+                # Use simpler command - let Daikon decide the output filename
+                cmd = f"java -Xmx4g -cp '{daikon_jar}' daikon.Daikon " f"{str(dtrace)}"
+
+                print_flush(
+                    f"    Running: java -cp daikon.jar daikon.Daikon {dtrace.name}"
+                )
+
+                result = subprocess.run(
+                    cmd,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                    cwd=str(self.daikon_output),
+                )
+
+                # Daikon creates .inv.gz by default with same base name as input
+                # Check if it was created
+                if inv_file.exists():
+                    print_flush(f"    ✓ Invariants: {inv_file.name}")
+                    inv_count += 1
+                else:
+                    # Something went wrong
+                    print_flush(f"    ✗ Failed to generate invariants")
+                    if result.returncode != 0:
+                        print_flush(f"      Exit code: {result.returncode}")
+                    if result.stderr:
+                        error_lines = [
+                            l.strip() for l in result.stderr.split("\n") if l.strip()
+                        ][:5]
+                        for line in error_lines:
+                            print_flush(f"      {line}")
+                    if result.stdout:
+                        output_lines = [
+                            l.strip() for l in result.stdout.split("\n") if l.strip()
+                        ][:3]
+                        if output_lines:
+                            for line in output_lines:
+                                print_flush(f"      {line}")
+
+                # Now generate JML format separately
+                cmd_jml = (
+                    f"java -Xmx4g -cp '{daikon_jar}' daikon.PrintInvariants "
+                    f"--format jml {str(inv_file)}"
+                )
+
+                if inv_file.exists():
+                    result = subprocess.run(
+                        cmd_jml, shell=True, capture_output=True, text=True, timeout=300
+                    )
+
+                    if result.stdout:
+                        jml_file.write_text(result.stdout)
+                        print_flush(f"    ✓ JML: {jml_file.name}")
+                        jml_count += 1
+
+            except subprocess.TimeoutExpired:
+                print_flush(f"    ⚠ Timeout processing {dtrace.name}")
+            except Exception as e:
+                print_flush(f"    ✗ Error: {str(e)[:100]}")
+
+        # Final Summary
+        print_flush("\n" + "=" * 70)
+        print_flush("FINAL SUMMARY")
+        print_flush("=" * 70)
+        if dyncomp_available:
+            print_flush(f"  ✓ DynComp analyses: {dyncomp_success}/{total_tests}")
+        print_flush(f"  ✓ Trace files: {success_count}/{total_tests}")
+        print_flush(f"  ✓ Invariant files (.inv.gz): {inv_count}/{len(dtrace_files)}")
+        print_flush(f"  ✓ JML files (.jml): {jml_count}/{len(dtrace_files)}")
+
+        if inv_count == 0:
+            print_flush("\n⚠ No invariants were generated. Possible reasons:")
+            print_flush("  - Trace files may be empty (tests didn't execute any code)")
+            print_flush("  - Daikon couldn't find enough patterns")
+            print_flush("  - Tests may have failed during execution")
+        else:
+            print_flush(
+                f"\n✓ Successfully generated invariants for {inv_count} test classes!"
             )
-
-            # cmd = [
-            #     "java",
-            #     "-cp",
-            #     daikon_jar,
-            #     "daikon.Daikon",
-            #     "--format",
-            #     "java",
-            #     "--output",
-            #     str(inv_file),
-            #     str(dtrace),
-            # ]
-
-            subprocess.run(cmd, capture_output=True)
-
-            # Also generate JML format
-            # cmd_jml = [
-            #     "java",
-            #     "-cp",
-            #     daikon_jar,
-            #     "daikon.Daikon",
-            #     "--format",
-            #     "jml",
-            #     "--output",
-            #     str(jml_file),
-            #     str(dtrace),
-            # ]
-
-            cmd_jml = (
-                f"java -cp '{classpath}' daikon.Daikon "
-                f"--format jml --output {str(jml_file)} {str(dtrace)}"
-            )
-
-            subprocess.run(cmd_jml, capture_output=True)
-
-            if inv_file.exists():
-                print_flush(f"  ✓ Generated invariants: {inv_file.name}")
+            print_flush(f"  View results in: daikon-output/ and jml-decorated-classes/")
 
     def find_source_file(self, class_name: str) -> Path:
         """Find source file for a class, handling both FQN and simple names."""
@@ -423,21 +705,11 @@ class DaikonJMLProcessor:
                 jml_file = inv_file.with_suffix("").with_suffix(".jml")
 
                 cmd = (
-                    f"java -cp {daikon_jar} daikon.PrintInvariants "
+                    f"java -cp '{daikon_jar}' daikon.PrintInvariants "
                     f"--format jml {str(inv_file)}"
                 )
 
-                # cmd = [
-                #     "java",
-                #     "-cp",
-                #     daikon_jar,
-                #     "daikon.PrintInvariants",
-                #     "--format",
-                #     "jml",
-                #     str(inv_file),
-                # ]
-
-                result = subprocess.run(cmd, capture_output=True, text=True)
+                result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
                 if result.stdout:
                     jml_file.write_text(result.stdout)
                     jml_files.append(jml_file)
@@ -535,7 +807,9 @@ def main():
         print_flush("Commands:")
         print_flush("  detect-tests     - Detect test classes and their targets")
         print_flush("  instrument-daikon - Prepare classes for Daikon instrumentation")
-        print_flush("  run-daikon       - Run tests with Daikon to collect invariants")
+        print_flush(
+            "  run-daikon       - Run tests with Daikon to collect invariants (3-phase with DynComp)"
+        )
         print_flush("  generate-jml     - Generate JML decorated classes")
         sys.exit(1)
 
