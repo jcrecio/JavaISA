@@ -1620,41 +1620,6 @@ This work is part of research on automated formal verification conducted at [You
 - [Maven Documentation](https://maven.apache.org/guides/) - Maven build tool
 - [Docker Documentation](https://docs.docker.com/) - Container platform
 
-### Research Papers
-
-- Ernst, M. D., et al. "The Daikon System for Dynamic Detection of Likely Invariants." Science of Computer Programming 69.1-3 (2007): 35-45.
-- Leavens, G. T., et al. "JML: A notation for detailed design." Behavioral Specifications of Businesses and Systems. Springer, 1999. 175-188.
-- Nipkow, T., Paulson, L. C., & Wenzel, M. "Isabelle/HOL: A Proof Assistant for Higher-Order Logic." Springer, 2002.
-
-### Academic Work
-
-For academic citations of this tool:
-
-```bibtex
-@misc{daikon-jml-tool,
-  title={Daikon JML Instrumentation Tool: Automated Specification Generation for Java-to-Isabelle Translation},
-  author={[Your Name]},
-  year={2025},
-  howpublished={\url{https://github.com/your-repo/daikon-jml-docker}},
-  note={Phase 1 of Java-to-Isabelle/HOL translation workflow}
-}
-```
-
-And cite the foundational Daikon paper:
-
-```bibtex
-@article{daikon2007,
-  author = {Ernst, Michael D. and Perkins, Jeff H. and Guo, Philip J. and McCamant, Stephen and Pacheco, Carlos and Tschantz, Matthew S. and Xiao, Chen},
-  title = {The Daikon System for Dynamic Detection of Likely Invariants},
-  journal = {Science of Computer Programming},
-  volume = {69},
-  number = {1-3},
-  pages = {35--45},
-  year = {2007},
-  publisher = {Elsevier}
-}
-```
-
 ### Research Collaboration
 
 For collaborations on the Java-to-Isabelle/HOL translation workflow
