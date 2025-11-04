@@ -2,8 +2,6 @@
 
 # -*- coding: utf-8 -*-
 # Author: Juan Carlos Recio Abad
-# Date: 2025-10-19
-# Modified: Added DynComp support for better memory usage and invariant quality
 
 import os
 import signal
